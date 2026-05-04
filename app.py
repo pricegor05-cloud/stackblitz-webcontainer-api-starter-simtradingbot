@@ -3,14 +3,21 @@ from fastapi.responses import HTMLResponse
 import threading
 import time
 
-# import your existing system
-from market_data import Portfolio, market, MomentumAI, MeanReversionAI, BreakoutAI, SentimentAI, LearningSystem, Risk, decide
+from engine import (
+    Portfolio,
+    MomentumAI,
+    MeanReversionAI,
+    BreakoutAI,
+    SentimentAI,
+    LearningSystem,
+    Risk,
+    decide
+)
+
+from market_data import market
 
 app = FastAPI()
 
-# =========================
-# GLOBAL STATE (LIVE FUND)
-# =========================
 portfolio = Portfolio(5000)
 learn = LearningSystem()
 risk = Risk()
@@ -24,9 +31,6 @@ agents = [
 
 latest_state = {}
 
-# =========================
-# 🚀 TRADING ENGINE LOOP
-# =========================
 def trading_loop():
     global latest_state
 
@@ -49,7 +53,6 @@ def trading_loop():
                 weights.append(learn.weight(name))
 
             action, conf = decide(votes, weights)
-
             allowed = risk.approve(portfolio, action, conf)
 
             pnl = 0
@@ -59,13 +62,11 @@ def trading_loop():
 
                 if action == "BUY":
                     portfolio.buy(symbol, price)
-                    pnl = 1  # simulated
-
+                    pnl = 1
                 elif action == "SELL":
                     portfolio.sell(symbol, price)
                     pnl = 1
 
-                # learning step
                 for name, _ in agents:
                     learn.update(name, pnl)
 
@@ -85,35 +86,28 @@ def trading_loop():
             "trades": trades
         }
 
-        time.sleep(2)
+        time.sleep(30)
 
-
-# start engine in background
 threading.Thread(target=trading_loop, daemon=True).start()
 
 
-# =========================
-# 🌐 API ENDPOINTS
-# =========================
 @app.get("/")
 def home():
     return {"status": "AI Hedge Fund Running"}
+
 
 @app.get("/state")
 def state():
     return latest_state
 
 
-# =========================
-# 📊 SIMPLE DASHBOARD UI
-# =========================
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     return """
     <html>
     <head>
         <title>AI Hedge Fund</title>
-        <meta http-equiv="refresh" content="2">
+        <meta http-equiv="refresh" content="5">
         <style>
             body { background:#0f0f0f; color:white; font-family:Arial; }
             .box { background:#1e1e1e; padding:20px; margin:10px; border-radius:10px; }
@@ -123,12 +117,12 @@ def dashboard():
         <h1>🏦 AI Hedge Fund Simulator</h1>
 
         <div class="box">
-            <h2>Live Data</h2>
-            <p>Go to <a href="/state" style="color:cyan">/state</a> for JSON</p>
+            <h2>Live API</h2>
+            <a href="/state" style="color:cyan">View Live Data</a>
         </div>
 
         <div class="box">
-            <p>Page refreshes every 15 seconds</p>
+            <p>Auto updates every 30s</p>
         </div>
     </body>
     </html>

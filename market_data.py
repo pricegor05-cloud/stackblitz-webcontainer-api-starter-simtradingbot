@@ -1,29 +1,33 @@
 import yfinance as yf
-import pandas as pd
 
 STOCKS = ["AAPL", "TSLA", "NVDA", "AMD", "MSFT"]
 
 def market():
-    data = yf.download(
-        tickers=" ".join(STOCKS),
-        period="1d",
-        interval="1m",
-        group_by="ticker",
-        progress=False
-    )
+    try:
+        data = yf.download(
+            tickers=" ".join(STOCKS),
+            period="1d",
+            interval="1m",
+            group_by="ticker",
+            progress=False
+        )
+    except:
+        return {}
 
     out = {}
 
     for s in STOCKS:
         try:
-            df = data[s]
+            df = data[s].dropna()
+
+            if len(df) < 5:
+                continue
 
             price = df["Close"].iloc[-1]
             prev = df["Close"].iloc[-5]
 
-            # simple derived signals
             trend = "UP" if price > prev else "DOWN"
-            vol = float(df["Volume"].iloc[-1]) / df["Volume"].mean()
+            vol = float(df["Volume"].iloc[-1]) / max(1, df["Volume"].mean())
 
             out[s] = {
                 "price": float(price),
