@@ -88,7 +88,8 @@ def decide(votes, weights):
         score[action] += conf * w
 
     best = max(score, key=score.get)
-    conf = score[best] / len(votes)
+    total = sum(score.values())
+    conf = score[best] / total
 
     return best, conf
 
