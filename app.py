@@ -13,6 +13,7 @@ from engine import (
     LearningSystem,
     Risk,
     TradeManager,
+    EvolutionEngine,
     decide
 )
 
@@ -28,6 +29,9 @@ learn = LearningSystem()
 risk = Risk()
 trade_manager = TradeManager()
 
+# 🧬 STEP 2 — EVOLUTION ENGINE INIT
+evolver = EvolutionEngine(learn)
+
 agents = [
     ("MomentumAI", MomentumAI()),
     ("MeanReversionAI", MeanReversionAI()),
@@ -41,7 +45,9 @@ latest_state = {}
 # 🚀 TRADING ENGINE
 # =========================
 def trading_loop():
-    global latest_state
+    global latest_state, agents
+
+    cycle = 0
 
     while True:
         mkt = market()
@@ -68,7 +74,7 @@ def trading_loop():
             pnl = 0
 
             # =========================
-            # 🟢 ENTRY LOGIC (POSITION SIZING)
+            # 🟢 ENTRY EXECUTION
             # =========================
             if allowed:
 
@@ -79,7 +85,7 @@ def trading_loop():
                     portfolio.sell(symbol, price)
 
             # =========================
-            # 🔴 AUTO EXIT (STOP LOSS / TAKE PROFIT)
+            # 🔴 AUTO EXIT SYSTEM
             # =========================
             if trade_manager.check_exit(portfolio, symbol, price):
                 portfolio.sell(symbol, price)
@@ -99,11 +105,19 @@ def trading_loop():
                 "price": price
             })
 
+        # =========================
+        # 🧬 STEP 3 — EVOLVE AGENTS
+        # =========================
+        cycle += 1
+        if cycle % 5 == 0:   # evolve every 5 loops (prevents chaos)
+            agents = evolver.evolve(agents)
+
         latest_state = {
             "equity": round(portfolio.equity, 2),
             "cash": round(portfolio.cash, 2),
             "positions": portfolio.positions,
             "agent_scores": learn.agent_score,
+            "active_agents": [a[0] for a in agents],
             "trades": trades
         }
 

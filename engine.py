@@ -150,3 +150,53 @@ class TradeManager:
             return True
 
         return False
+
+        # =========================
+# 🧬 STRATEGY EVOLUTION ENGINE (STEP 1)
+# =========================
+class EvolutionEngine:
+    def __init__(self, learning_system):
+        self.learn = learning_system
+
+    def evolve(self, agents):
+        new_agents = []
+
+        for name, agent in agents:
+            score = self.learn.agent_score[name]
+
+            # 🟢 strong strategies survive
+            if score > 1.2:
+                new_agents.append((name, agent))
+
+            # 🔴 weak strategies removed
+            elif score < 0.8:
+                continue
+
+            # 🧬 medium strategies mutate
+            else:
+                mutated = self.mutate(agent)
+                new_name = name + "_v2"
+                new_agents.append((new_name, mutated))
+
+                # inherit score with noise
+                self.learn.agent_score[new_name] = score * random.uniform(0.9, 1.1)
+
+        return new_agents
+
+    # =========================
+    # 🧪 MUTATION LOGIC
+    # =========================
+    def mutate(self, agent):
+        class MutatedAgent:
+            def decide(self, d):
+                base_action, base_conf = agent.decide(d)
+
+                # small random exploration (real trading concept)
+                if random.random() < 0.08:
+                    return ("BUY", 0.9)
+                if random.random() < 0.08:
+                    return ("SELL", 0.9)
+
+                return base_action, base_conf
+
+        return MutatedAgent()
