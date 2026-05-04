@@ -1,32 +1,49 @@
 import random
 
 # =========================
-# 💰 PORTFOLIO
+# 💰 PORTFOLIO (REAL EXECUTION)
 # =========================
 class Portfolio:
     def __init__(self, cash=5000):
         self.cash = cash
-        self.positions = {}
+        self.positions = {}  # symbol -> {qty, entry}
         self.equity = cash
 
     def update(self, prices):
         total = self.cash
-        for s, q in self.positions.items():
+
+        for s, pos in self.positions.items():
             if s in prices:
-                total += q * prices[s]
+                price = prices[s]
+                total += pos["qty"] * price
+
         self.equity = total
 
-    def buy(self, symbol, price):
-        if self.cash <= 0:
-            return
-        amount = self.equity * 0.1
-        qty = amount / price
-        self.cash -= amount
-        self.positions[symbol] = self.positions.get(symbol, 0) + qty
+    # =========================
+    # 🟢 POSITION SIZING BUY
+    # =========================
+    def buy(self, symbol, price, confidence=0.5):
+        risk_budget = self.equity * 0.05  # 5% max risk per trade
+        size = risk_budget * max(0.2, min(confidence, 1.0))
 
+        if self.cash < size:
+            return
+
+        qty = size / price
+        self.cash -= size
+
+        self.positions[symbol] = {
+            "qty": qty,
+            "entry": price
+        }
+
+    # =========================
+    # 🔴 EXIT POSITION
+    # =========================
     def sell(self, symbol, price):
         if symbol in self.positions:
-            self.cash += self.positions[symbol] * price
+            pos = self.positions[symbol]
+            self.cash += pos["qty"] * price
             del self.positions[symbol]
 
 
@@ -79,7 +96,7 @@ class LearningSystem:
 
 
 # =========================
-# 🧠 META DECIDER
+# 🧠 META DECIDER (FIXED)
 # =========================
 def decide(votes, weights):
     score = {"BUY": 0, "SELL": 0, "HOLD": 0}
@@ -88,7 +105,8 @@ def decide(votes, weights):
         score[action] += conf * w
 
     best = max(score, key=score.get)
-    total = sum(score.values())
+
+    total = sum(score.values()) + 1e-9
     conf = score[best] / total
 
     return best, conf
@@ -106,3 +124,29 @@ class Risk:
         if action == "HOLD":
             return False
         return True
+
+
+# =========================
+# 🛑 TRADE MANAGER (STOP LOSS / TAKE PROFIT)
+# =========================
+class TradeManager:
+    def __init__(self):
+        self.stop_loss = 0.03
+        self.take_profit = 0.06
+
+    def check_exit(self, portfolio, symbol, price):
+        if symbol not in portfolio.positions:
+            return False
+
+        pos = portfolio.positions[symbol]
+        entry = pos["entry"]
+
+        change = (price - entry) / entry
+
+        if change <= -self.stop_loss:
+            return True
+
+        if change >= self.take_profit:
+            return True
+
+        return False
