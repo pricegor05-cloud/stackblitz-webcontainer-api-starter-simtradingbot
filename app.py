@@ -1,7 +1,8 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 import threading
 import time
+import os
 
 from engine import (
     Portfolio,
@@ -31,6 +32,9 @@ agents = [
 
 latest_state = {}
 
+# =========================
+# 🚀 TRADING LOOP
+# =========================
 def trading_loop():
     global latest_state
 
@@ -91,6 +95,9 @@ def trading_loop():
 threading.Thread(target=trading_loop, daemon=True).start()
 
 
+# =========================
+# 🌐 ROUTES
+# =========================
 @app.get("/")
 def home():
     return {"status": "AI Hedge Fund Running"}
@@ -101,6 +108,9 @@ def state():
     return latest_state
 
 
+# =========================
+# 📊 INLINE DASHBOARD
+# =========================
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     return """
@@ -127,3 +137,16 @@ def dashboard():
     </body>
     </html>
     """
+
+
+# =========================
+# 🟢 EXTERNAL FRONTEND LOADER (NEW FIX)
+# =========================
+@app.get("/ui")
+def ui():
+    file_path = "frontend.html"
+
+    if os.path.exists(file_path):
+        return FileResponse(file_path)
+
+    return {"error": "frontend.html not found"}
