@@ -4,7 +4,7 @@ import threading
 import time
 
 # import your existing system
-from self_learning_fund import Portfolio, market, MomentumAI, MeanReversionAI, BreakoutAI, SentimentAI, LearningSystem, Risk, decide
+from market_data import Portfolio, market, MomentumAI, MeanReversionAI, BreakoutAI, SentimentAI, LearningSystem, Risk, decide
 
 app = FastAPI()
 
@@ -128,7 +128,7 @@ def dashboard():
         </div>
 
         <div class="box">
-            <p>Page refreshes every 2 seconds</p>
+            <p>Page refreshes every 15 seconds</p>
         </div>
     </body>
     </html>
