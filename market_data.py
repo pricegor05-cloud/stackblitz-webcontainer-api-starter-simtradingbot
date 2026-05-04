@@ -1,6 +1,7 @@
 import yfinance as yf
 
-STOCKS = ["AAPL", "TSLA", "NVDA", "AMD", "MSFT"]
+STOCKS = ["AAPL", "TSLA", "NVDA", "AMD", "MSFT","RBLX","AVGO","F","ZEC","META",
+"SOFI"]
 
 def market():
     try:
