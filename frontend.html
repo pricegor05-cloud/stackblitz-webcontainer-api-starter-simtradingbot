@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Hedge Fund Terminal</title>
+    <style>
+        body {
+            background: #0d0d0d;
+            color: white;
+            font-family: Arial;
+        }
+        .box {
+            background: #1e1e1e;
+            padding: 15px;
+            margin: 10px;
+            border-radius: 10px;
+        }
+        .green { color: #00ff88; }
+        .red { color: #ff4d4d; }
+    </style>
+</head>
+
+<body>
+    <h1>🏦 AI Hedge Fund Terminal</h1>
+
+    <div class="box">
+        <h2>Equity: <span id="equity">Loading...</span></h2>
+        <h3>Cash: <span id="cash"></span></h3>
+    </div>
+
+    <div class="box">
+        <h2>AI Scores</h2>
+        <pre id="agents"></pre>
+    </div>
+
+    <div class="box">
+        <h2>Trades</h2>
+        <pre id="trades"></pre>
+    </div>
+
+<script>
+const API = "https://stackblitz-webcontainer-api-starter-f0hz.onrender.com/state";
+
+async function loadData() {
+    try {
+        const res = await fetch(API);
+        const data = await res.json();
+
+        document.getElementById("equity").innerText = data.equity;
+        document.getElementById("cash").innerText = data.cash;
+
+        document.getElementById("agents").innerText =
+            JSON.stringify(data.agent_scores, null, 2);
+
+        document.getElementById("trades").innerText =
+            JSON.stringify(data.trades, null, 2);
+
+    } catch (err) {
+        console.log(err);
+    }
+}
+
+setInterval(loadData, 3000);
+loadData();
+</script>
+
+</body>
+</html>
