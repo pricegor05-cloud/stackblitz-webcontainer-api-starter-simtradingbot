@@ -45,7 +45,7 @@ MAX_AGENTS = 10
 
 
 # =========================
-# 🧠 STEP 4 — CHOP ZONE DETECTOR
+# CHOP ZONE DETECTOR
 # =========================
 def detect_chop(mkt):
     vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
@@ -58,7 +58,6 @@ def detect_chop(mkt):
     up = trends.count("UP")
     down = trends.count("DOWN")
 
-    # 🟡 CHOP CONDITIONS
     if avg_vol < 0.9 and abs(up - down) < len(trends) * 0.2:
         return True
 
@@ -66,7 +65,7 @@ def detect_chop(mkt):
 
 
 # =========================
-# 🧬 STEP 3 — SAFE EVOLUTION
+# EVOLUTION SYSTEM
 # =========================
 def evolve_agents():
     global agents
@@ -77,38 +76,34 @@ def evolve_agents():
     for name, agent in agents:
         score = learn.agent_score.get(name, 1.0)
 
-        # strong survive
         if score > 1.2:
             new_agents.append((name, agent))
 
-        # weak removed
         elif score < 0.8:
             continue
 
-        # mutate
         else:
             mutated = evolver.mutate(agent)
-            new_name = name + "_v2_" + str(random.randint(100, 999))
+            new_name = f"{name}_v2_{random.randint(100,999)}"
             new_agents.append((new_name, mutated))
             updated_scores[new_name] = score * random.uniform(0.95, 1.05)
 
-    # cap system size
     new_agents = sorted(
         new_agents,
-        key=lambda x: learn.agent_score.get(x[0], 1.0),
+        key=lambda x: updated_scores.get(x[0], 1.0),
         reverse=True
     )[:MAX_AGENTS]
 
-    clean = {}
-    for name, _ in new_agents:
-        clean[name] = updated_scores.get(name, 1.0)
+    learn.agent_score = {
+        name: updated_scores.get(name, 1.0)
+        for name, _ in new_agents
+    }
 
-    learn.agent_score = clean
     return new_agents
 
 
 # =========================
-# 🚀 TRADING LOOP
+# TRADING LOOP
 # =========================
 def trading_loop():
     global latest_state, agents, cycle
@@ -125,7 +120,6 @@ def trading_loop():
 
         trades = []
 
-        # 🟡 STEP 4 — CHOP ZONE FILTER
         chop = detect_chop(mkt)
 
         for symbol, data in mkt.items():
@@ -144,9 +138,9 @@ def trading_loop():
 
             action, conf = decide(votes, weights)
 
-            # 🧠 HEAD TRADER OVERRIDE (STEP 4)
             allowed = risk.approve(portfolio, action, conf)
 
+            # HEAD TRADER OVERRIDE
             if allowed:
                 allowed = head_trader.approve_trade(
                     symbol,
@@ -154,15 +148,15 @@ def trading_loop():
                     conf,
                     data,
                     portfolio,
-                    chop  # 🟡 passes chop zone signal
+                    chop
                 )
+
+            # HARD CHOP BLOCK
+            if chop:
+                allowed = False
 
             price = data["price"]
             pnl = 0
-
-            # 🛑 CHOP PROTECTION: block trading completely
-            if chop:
-                allowed = False
 
             if allowed:
                 if action == "BUY":
@@ -183,7 +177,7 @@ def trading_loop():
                 "confidence": round(conf, 2),
                 "allowed": allowed,
                 "price": round(price, 2),
-                "chop_zone": chop
+                "chop": chop
             })
 
         cycle += 1
@@ -194,7 +188,6 @@ def trading_loop():
         latest_state = {
             "equity": round(portfolio.equity, 2),
             "cash": round(portfolio.cash, 2),
-            "positions": portfolio.positions,
             "agent_scores": learn.agent_score,
             "active_agents": [a[0] for a in agents],
             "chop_zone": chop,
@@ -204,6 +197,7 @@ def trading_loop():
         time.sleep(5)
 
 
+# start engine
 threading.Thread(target=trading_loop, daemon=True).start()
 
 

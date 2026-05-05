@@ -1,7 +1,7 @@
 import random
 
 # =========================
-# 💰 PORTFOLIO (REAL EXECUTION)
+# 💰 PORTFOLIO
 # =========================
 class Portfolio:
     def __init__(self, cash=5000):
@@ -20,7 +20,7 @@ class Portfolio:
         risk_budget = self.equity * 0.05
         size = risk_budget * max(0.2, min(confidence, 1.0))
 
-        if self.cash < size:
+        if self.cash < size or price <= 0:
             return
 
         qty = size / price
@@ -43,15 +43,15 @@ class Portfolio:
 # =========================
 class MomentumAI:
     def decide(self, d):
-        return ("BUY", 0.8) if d["trend"] == "UP" else ("HOLD", 0.5)
+        return ("BUY", 0.8) if d.get("trend") == "UP" else ("HOLD", 0.5)
 
 class MeanReversionAI:
     def decide(self, d):
-        return ("BUY", 0.7) if d["vol"] > 0.6 else ("SELL", 0.6)
+        return ("BUY", 0.7) if d.get("vol", 0) > 0.6 else ("SELL", 0.6)
 
 class BreakoutAI:
     def decide(self, d):
-        return ("BUY", 0.75) if d["vol"] > 0.7 else ("HOLD", 0.4)
+        return ("BUY", 0.75) if d.get("vol", 0) > 0.7 else ("HOLD", 0.4)
 
 class SentimentAI:
     def decide(self, d):
@@ -75,9 +75,12 @@ class LearningSystem:
         }
 
     def weight(self, name):
-        return self.agent_score[name]
+        return self.agent_score.get(name, 1.0)
 
     def update(self, name, pnl):
+        if name not in self.agent_score:
+            self.agent_score[name] = 1.0
+
         if pnl > 0:
             self.agent_score[name] *= 1.02
         else:
@@ -117,19 +120,6 @@ class Risk:
 
 
 # =========================
-# 🧠 TREND REVERSAL DETECTOR
-# =========================
-def detect_reversal(data):
-    if data["vol"] > 1.2:
-        return -1
-    if data["trend"] == "DOWN":
-        return -1
-    if data["trend"] == "UP" and data["vol"] < 0.8:
-        return 1
-    return 0
-
-
-# =========================
 # 🛑 TRADE MANAGER
 # =========================
 class TradeManager:
@@ -148,10 +138,8 @@ class TradeManager:
 
         if trend_signal == -1 and change > 0.02:
             return True
-
         if change <= -self.stop_loss:
             return True
-
         if change >= self.take_profit:
             return True
 
@@ -159,36 +147,20 @@ class TradeManager:
 
 
 # =========================
-# 🧬 EVOLUTION ENGINE
+# 🧠 EVOLUTION ENGINE
 # =========================
 class EvolutionEngine:
-    def __init__(self, learning_system):
-        self.learn = learning_system
-
-    def evolve(self, agents):
-        new_agents = []
-
-        for name, agent in agents:
-            score = self.learn.agent_score[name]
-
-            if score > 1.2:
-                new_agents.append((name, agent))
-
-            elif score < 0.8:
-                continue
-
-            else:
-                mutated = self.mutate(agent)
-                new_name = name + "_v2"
-                new_agents.append((new_name, mutated))
-                self.learn.agent_score[new_name] = score * random.uniform(0.9, 1.1)
-
-        return new_agents
+    def __init__(self, learning):
+        self.learning = learning
 
     def mutate(self, agent):
         class Mutated:
             def decide(self, d):
-                a, c = agent.decide(d)
+                try:
+                    a, c = agent.decide(d)
+                except:
+                    return "HOLD", 0.5
+
                 if random.random() < 0.08:
                     return ("BUY", 0.9)
                 if random.random() < 0.08:
@@ -197,41 +169,51 @@ class EvolutionEngine:
 
         return Mutated()
 
-        # =========================
-# 🧠 HEAD TRADER OVERRIDE (INSTITUTIONAL CONTROL LAYER)
-# =========================
 
+# =========================
+# 🧠 HEAD TRADER (FIXED)
+# =========================
 class HeadTrader:
     def __init__(self):
         self.cooldown = {}
 
-    def approve_trade(self, symbol, action, conf, data, portfolio, chop):
-        """
-        Head trader override layer:
-        - blocks bad trades
-        - reduces trading in chop zones
-        - enforces institutional discipline
-        """
+    def approve_trade(self, symbol, action, conf, data, portfolio, chop=False):
 
-        price = data.get("price", 0)
         trend = data.get("trend", "FLAT")
         vol = data.get("vol", 1)
 
-        # 🟡 1. CHOP ZONE = NO TRADING
         if chop:
             return False
 
-        # 🟠 2. LOW CONFIDENCE BLOCK
         if conf < 0.60:
             return False
 
-        # 🔴 3. DON'T BUY INTO STRONG DOWN TRENDS
         if action == "BUY" and trend == "DOWN" and vol > 1.1:
             return False
 
-        # 🔴 4. DON'T SELL INTO STRONG UP TRENDS
         if action == "SELL" and trend == "UP" and vol > 1.1:
             return False
 
-        # 🟢 5. SIMPLE “INSTITUTIONAL FILTER PASS”
         return True
+
+
+# =========================
+# 🧠 CHOP ZONE DETECTOR (FIXED)
+# =========================
+def detect_chop(mkt):
+    vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
+
+    if not vols:
+        return False
+
+    avg_vol = sum(vols) / len(vols)
+
+    ups = sum(1 for s in mkt if mkt[s]["trend"] == "UP")
+    downs = sum(1 for s in mkt if mkt[s]["trend"] == "DOWN")
+
+    imbalance = abs(ups - downs)
+
+    if avg_vol < 0.95 and imbalance < len(mkt) * 0.25:
+        return True
+
+    return False
