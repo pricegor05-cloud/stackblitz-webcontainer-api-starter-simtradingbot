@@ -3,6 +3,9 @@ import pandas as pd
 
 STOCKS = ["AAPL", "TSLA", "NVDA", "AMD", "MSFT"]
 
+# =========================
+# 🧠 MARKET ENGINE (UPGRADED)
+# =========================
 def market():
     try:
         data = yf.download(
@@ -26,22 +29,41 @@ def market():
                 if df is None or df.empty:
                     continue
 
-                if len(df["Close"]) < 5:
+                if len(df) < 10:
                     continue
 
-                price = float(df["Close"].iloc[-1])
-                prev = float(df["Close"].iloc[-5])
+                close = df["Close"].dropna()
+                vol_data = df["Volume"].dropna()
 
-                vol_series = df["Volume"].dropna()
+                if len(close) < 10:
+                    continue
 
+                price = float(close.iloc[-1])
+                prev = float(close.iloc[-5])
+
+                # =========================
+                # 📊 VOLUME STRENGTH (FIXED)
+                # =========================
                 vol = 1.0
-                if len(vol_series) > 0 and vol_series.mean() != 0:
-                    vol = float(vol_series.iloc[-1]) / float(vol_series.mean())
+                if len(vol_data) > 5:
+                    avg_vol = vol_data.mean()
+                    if avg_vol > 0:
+                        vol = float(vol_data.iloc[-1]) / float(avg_vol)
 
+                # =========================
+                # ⚡ VOLATILITY FILTER
+                # =========================
+                returns = close.pct_change().dropna()
+                volatility = float(returns.std()) if len(returns) > 2 else 0.0
+
+                # =========================
+                # 🧠 FINAL SIGNAL BUILD
+                # =========================
                 out[s] = {
                     "price": price,
                     "trend": "UP" if price > prev else "DOWN",
-                    "vol": float(vol)
+                    "vol": float(vol),
+                    "volatility": float(volatility)
                 }
 
             except Exception:
