@@ -1,6 +1,6 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
-import threading, time, random, asyncio
+import threading, time, asyncio
 
 from engine import *
 from stream_market import market
@@ -28,6 +28,13 @@ agents = [
     ("SentimentAI", SentimentAI())
 ]
 
+cycle = 0
+clients = []
+last_heartbeat = {"t": time.time()}
+
+# =========================
+# SAFE INITIAL STATE (FIXED)
+# =========================
 latest_state = {
     "equity": 5000,
     "cash": 5000,
@@ -37,20 +44,6 @@ latest_state = {
     "heartbeat": time.time(),
     "trades": []
 }
-
-latest_state.update({
-    "equity": round(portfolio.equity, 2),
-    "cash": round(portfolio.cash, 2),
-    "agent_scores": learn.agent_score,
-    "active_agents": [a[0] for a in agents],
-    "chop_zone": chop,
-    "heartbeat": time.time(),
-    "trades": trades[-20:]
-})
-
-cycle = 0
-clients = []
-last_heartbeat = {"t": time.time()}
 
 # =========================
 # RESET
@@ -68,8 +61,10 @@ def reset_agents():
 # =========================
 def watchdog():
     global agents
+
     while True:
         time.sleep(10)
+
         if time.time() - last_heartbeat["t"] > 25:
             agents = reset_agents()
             last_heartbeat["t"] = time.time()
@@ -89,7 +84,7 @@ def detect_chop(mkt):
     return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
 # =========================
-# TRADING LOOP (LEVEL 3 CORE)
+# TRADING LOOP (FIXED)
 # =========================
 def trading_loop():
     global agents, latest_state, cycle
@@ -101,16 +96,14 @@ def trading_loop():
             last_heartbeat["t"] = time.time()
 
             mkt = market()
+            if not mkt:
+                time.sleep(1)
+                continue
 
-            prices = {s: mkt[s]["price"] for s in mkt}
-            portfolio.update(prices)
+            portfolio.update({s: mkt[s]["price"] for s in mkt})
 
             trades = []
             chop = detect_chop(mkt)
-
-            # 🔥 FORCE ACTIVE STATE (NO IDLE LOOP)
-            if len(mkt) == 0:
-                continue
 
             for symbol, data in mkt.items():
 
@@ -145,10 +138,8 @@ def trading_loop():
                         portfolio.buy(symbol, price, conf)
                     elif action == "SELL":
                         portfolio.sell(symbol, price)
+                    pnl = conf
 
-                    pnl = conf  # 💰 proxy pnl signal
-
-                # 🧠 UPDATE AI MEMORY (IMPORTANT FIX)
                 for name, _ in agents:
                     learn.update(name, pnl)
                     analytics.update(name, pnl)
@@ -164,8 +155,8 @@ def trading_loop():
 
             cycle += 1
 
-            # 🧬 ALWAYS EVOLVE (NOT STOPPED EVERY 5 TICKS ONLY)
-            agents = [(name, evolver.mutate(agent)) for name, agent in agents]
+            # safe evolution
+            agents = [(n, evolver.mutate(a)) for n, a in agents]
 
             latest_state = {
                 "equity": round(portfolio.equity, 2),
@@ -177,7 +168,7 @@ def trading_loop():
                 "trades": trades[-20:]
             }
 
-            time.sleep(1.5)  # 🔥 FASTER STREAM = LIVE FEEL
+            time.sleep(1.5)
 
         except Exception as e:
             print("RECOVERED:", e)
@@ -198,19 +189,8 @@ async def ws(websocket: WebSocket):
     except:
         clients.remove(websocket)
 
-async def broadcast(data):
-    dead = []
-    for c in clients:
-        try:
-            await c.send_json(data)
-        except:
-            dead.append(c)
-
-    for d in dead:
-        clients.remove(d)
-
 # =========================
-# START THREADS
+# START SYSTEM
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
@@ -224,124 +204,4 @@ def state():
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>AI Fund Terminal v5</title>
-    <style>
-        body {
-            margin:0;
-            background:#0b0f14;
-            color:#00ffcc;
-            font-family: monospace;
-        }
-
-        .grid {
-            display:grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap:10px;
-            padding:10px;
-        }
-
-        .box {
-            background:#111827;
-            padding:12px;
-            border-radius:10px;
-            box-shadow:0 0 10px rgba(0,255,200,0.1);
-        }
-
-        .big {
-            font-size:24px;
-            font-weight:bold;
-        }
-
-        .warn { color:#ff4d4d; }
-        .good { color:#00ff88; }
-
-        pre {
-            white-space: pre-wrap;
-        }
-
-        .header {
-            padding:15px;
-            font-size:22px;
-            text-align:center;
-            border-bottom:1px solid #1f2937;
-        }
-    </style>
-</head>
-
-<body>
-
-<div class="header">
-    🧠 AI HEDGE FUND TERMINAL (LIVE STREAM MODE)
-</div>
-
-<div class="grid">
-
-    <div class="box">
-        <div class="big">Equity</div>
-        <div id="equity">...</div>
-    </div>
-
-    <div class="box">
-        <div class="big">Cash</div>
-        <div id="cash">...</div>
-    </div>
-
-    <div class="box">
-        <div class="big">Chop Zone</div>
-        <div id="chop">...</div>
-    </div>
-
-    <div class="box">
-        <div class="big">Active Agents</div>
-        <pre id="agents"></pre>
-    </div>
-
-    <div class="box">
-        <div class="big">Agent Scores</div>
-        <pre id="scores"></pre>
-    </div>
-
-    <div class="box">
-        <div class="big">Live Trades</div>
-        <pre id="trades"></pre>
-    </div>
-
-</div>
-
-<script>
-
-async function load(){
-    const r = await fetch("/state");
-    const d = await r.json();
-
-    document.getElementById("equity").innerHTML =
-        "<span class='good'>$" + d.equity + "</span>";
-
-    document.getElementById("cash").innerHTML =
-        "$" + d.cash;
-
-    document.getElementById("chop").innerHTML =
-        d.chop_zone ? "<span class='warn'>YES</span>" : "NO";
-
-    document.getElementById("agents").innerText =
-        JSON.stringify(d.active_agents, null, 2);
-
-    document.getElementById("scores").innerText =
-        JSON.stringify(d.agent_scores, null, 2);
-
-    document.getElementById("trades").innerText =
-        JSON.stringify(d.trades || [], null, 2);
-}
-
-setInterval(load, 1000);
-load();
-
-</script>
-
-</body>
-</html>
-"""
+    return open("frontend.html").read()
