@@ -43,9 +43,31 @@ latest_state = {}
 cycle = 0
 MAX_AGENTS = 10
 
+# =========================
+# HEARTBEAT + SAFETY
+# =========================
+last_heartbeat = {"t": time.time()}
+
+def reset_agents():
+    return [
+        ("MomentumAI", MomentumAI()),
+        ("MeanReversionAI", MeanReversionAI()),
+        ("BreakoutAI", BreakoutAI()),
+        ("SentimentAI", SentimentAI())
+    ]
+
+def watchdog():
+    global agents
+    while True:
+        time.sleep(10)
+
+        if time.time() - last_heartbeat["t"] > 20:
+            print("⚠️ WATCHDOG RESET: SYSTEM STUCK")
+            agents = reset_agents()
+            last_heartbeat["t"] = time.time()
 
 # =========================
-# CHOP ZONE DETECTOR
+# CHOP DETECTOR
 # =========================
 def detect_chop(mkt):
     vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
@@ -58,11 +80,7 @@ def detect_chop(mkt):
     up = trends.count("UP")
     down = trends.count("DOWN")
 
-    if avg_vol < 0.9 and abs(up - down) < len(trends) * 0.2:
-        return True
-
-    return False
-
+    return avg_vol < 0.9 and abs(up - down) < len(trends) * 0.2
 
 # =========================
 # EVOLUTION SYSTEM
@@ -78,6 +96,7 @@ def evolve_agents():
 
         if score > 1.2:
             new_agents.append((name, agent))
+            updated_scores[name] = score
 
         elif score < 0.8:
             continue
@@ -101,7 +120,6 @@ def evolve_agents():
 
     return new_agents
 
-
 # =========================
 # TRADING LOOP
 # =========================
@@ -109,97 +127,101 @@ def trading_loop():
     global latest_state, agents, cycle
 
     while True:
-        mkt = market()
+        try:
+            # ✅ HEARTBEAT (YOU ASKED FOR THIS)
+            last_heartbeat["t"] = time.time()
 
-        if not mkt:
-            time.sleep(2)
-            continue
+            mkt = market()
+            if not mkt:
+                time.sleep(2)
+                continue
 
-        prices = {s: mkt[s]["price"] for s in mkt}
-        portfolio.update(prices)
+            prices = {s: mkt[s]["price"] for s in mkt}
+            portfolio.update(prices)
 
-        trades = []
+            trades = []
+            chop = detect_chop(mkt)
 
-        chop = detect_chop(mkt)
+            for symbol, data in mkt.items():
 
-        for symbol, data in mkt.items():
+                votes, weights = [], []
 
-            votes = []
-            weights = []
+                for name, agent in agents:
+                    try:
+                        action, conf = agent.decide(data)
+                    except:
+                        action, conf = "HOLD", 0.5
 
-            for name, agent in agents:
-                try:
-                    action, conf = agent.decide(data)
-                except:
-                    action, conf = "HOLD", 0.5
+                    votes.append((action, conf))
+                    weights.append(learn.weight(name))
 
-                votes.append((action, conf))
-                weights.append(learn.weight(name))
+                action, conf = decide(votes, weights)
 
-            action, conf = decide(votes, weights)
+                allowed = risk.approve(portfolio, action, conf)
 
-            allowed = risk.approve(portfolio, action, conf)
+                if allowed:
+                    allowed = head_trader.approve_trade(
+                        symbol,
+                        action,
+                        conf,
+                        data,
+                        portfolio,
+                        chop
+                    )
 
-            # HEAD TRADER OVERRIDE
-            if allowed:
-                allowed = head_trader.approve_trade(
-                    symbol,
-                    action,
-                    conf,
-                    data,
-                    portfolio,
-                    chop
-                )
+                if chop:
+                    allowed = False
 
-            # HARD CHOP BLOCK
-            if chop:
-                allowed = False
+                price = data["price"]
+                pnl = 0
 
-            price = data["price"]
-            pnl = 0
+                if allowed:
+                    if action == "BUY":
+                        portfolio.buy(symbol, price, conf)
+                    elif action == "SELL":
+                        portfolio.sell(symbol, price)
 
-            if allowed:
-                if action == "BUY":
-                    portfolio.buy(symbol, price, conf)
-                elif action == "SELL":
+                if trade_manager.check_exit(portfolio, symbol, price):
                     portfolio.sell(symbol, price)
+                    pnl = 1
 
-            if trade_manager.check_exit(portfolio, symbol, price):
-                portfolio.sell(symbol, price)
-                pnl = 1
+                for name, _ in agents:
+                    learn.update(name, pnl)
 
-            for name, _ in agents:
-                learn.update(name, pnl)
+                trades.append({
+                    "symbol": symbol,
+                    "action": action,
+                    "confidence": round(conf, 2),
+                    "allowed": allowed,
+                    "price": round(price, 2),
+                    "chop": chop
+                })
 
-            trades.append({
-                "symbol": symbol,
-                "action": action,
-                "confidence": round(conf, 2),
-                "allowed": allowed,
-                "price": round(price, 2),
-                "chop": chop
-            })
+            cycle += 1
+            if cycle % 5 == 0:
+                agents = evolve_agents()
 
-        cycle += 1
+            latest_state = {
+                "equity": round(portfolio.equity, 2),
+                "cash": round(portfolio.cash, 2),
+                "agent_scores": learn.agent_score,
+                "active_agents": [a[0] for a in agents],
+                "chop_zone": chop,
+                "heartbeat": last_heartbeat["t"],  # ✅ THIS IS THE LINE YOU ASKED FOR
+                "trades": trades[-20:]
+            }
 
-        if cycle % 5 == 0:
-            agents = evolve_agents()
+            time.sleep(5)
 
-        latest_state = {
-            "equity": round(portfolio.equity, 2),
-            "cash": round(portfolio.cash, 2),
-            "agent_scores": learn.agent_score,
-            "active_agents": [a[0] for a in agents],
-            "chop_zone": chop,
-            "trades": trades[-20:]
-        }
+        except Exception as e:
+            print("🔥 LOOP RECOVERED:", e)
+            time.sleep(2)
 
-        time.sleep(5)
-
-
-# start engine
+# =========================
+# START SYSTEM THREADS (IMPORTANT FIX)
+# =========================
 threading.Thread(target=trading_loop, daemon=True).start()
-
+threading.Thread(target=watchdog, daemon=True).start()
 
 # =========================
 # ROUTES
@@ -208,11 +230,9 @@ threading.Thread(target=trading_loop, daemon=True).start()
 def home():
     return {"status": "running"}
 
-
 @app.get("/state")
 def state():
     return latest_state
-
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
