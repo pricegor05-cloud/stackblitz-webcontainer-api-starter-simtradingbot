@@ -1,23 +1,8 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import threading
-import time
-import random
+import threading, time, random
 
-from engine import (
-    Portfolio,
-    MomentumAI,
-    MeanReversionAI,
-    BreakoutAI,
-    SentimentAI,
-    LearningSystem,
-    Risk,
-    TradeManager,
-    EvolutionEngine,
-    HeadTrader,
-    decide
-)
-
+from engine import *
 from market_data import market
 
 app = FastAPI()
@@ -41,12 +26,12 @@ agents = [
 
 latest_state = {}
 cycle = 0
-MAX_AGENTS = 10
+last_heartbeat = {"t": time.time()}
 
 # =========================
-# HEARTBEAT + SAFETY
+# 🧠 STEP 1 — AGENT HEARTBEAT TRACKING
 # =========================
-last_heartbeat = {"t": time.time()}
+agent_heartbeat = {}
 
 def reset_agents():
     return [
@@ -56,82 +41,47 @@ def reset_agents():
         ("SentimentAI", SentimentAI())
     ]
 
+# =========================
+# 🛟 STEP 2 — WATCHDOG (AUTO RECOVERY)
+# =========================
 def watchdog():
     global agents
     while True:
         time.sleep(10)
 
         if time.time() - last_heartbeat["t"] > 20:
-            print("⚠️ WATCHDOG RESET: SYSTEM STUCK")
+            print("⚠️ WATCHDOG RESET TRIGGERED")
+
             agents = reset_agents()
             last_heartbeat["t"] = time.time()
 
-# =========================
-# CHOP DETECTOR
-# =========================
-def detect_chop(mkt):
-    vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
-    trends = [mkt[s]["trend"] for s in mkt]
-
-    if not vols:
-        return False
-
-    avg_vol = sum(vols) / len(vols)
-    up = trends.count("UP")
-    down = trends.count("DOWN")
-
-    return avg_vol < 0.9 and abs(up - down) < len(trends) * 0.2
+            agent_heartbeat.clear()
 
 # =========================
-# EVOLUTION SYSTEM
+# 🚨 STEP 3 — SAFE MARKET HANDLING
 # =========================
-def evolve_agents():
-    global agents
-
-    new_agents = []
-    updated_scores = learn.agent_score.copy()
-
-    for name, agent in agents:
-        score = learn.agent_score.get(name, 1.0)
-
-        if score > 1.2:
-            new_agents.append((name, agent))
-            updated_scores[name] = score
-
-        elif score < 0.8:
-            continue
-
-        else:
-            mutated = evolver.mutate(agent)
-            new_name = f"{name}_v2_{random.randint(100,999)}"
-            new_agents.append((new_name, mutated))
-            updated_scores[new_name] = score * random.uniform(0.95, 1.05)
-
-    new_agents = sorted(
-        new_agents,
-        key=lambda x: updated_scores.get(x[0], 1.0),
-        reverse=True
-    )[:MAX_AGENTS]
-
-    learn.agent_score = {
-        name: updated_scores.get(name, 1.0)
-        for name, _ in new_agents
-    }
-
-    return new_agents
+def safe_market():
+    try:
+        mkt = market()
+        if not mkt or len(mkt) == 0:
+            latest_state["error"] = "market_empty"
+            return None
+        return mkt
+    except Exception as e:
+        latest_state["error"] = str(e)
+        return None
 
 # =========================
-# TRADING LOOP
+# 🧠 STEP 4 — TRADING LOOP (HARDENED)
 # =========================
 def trading_loop():
-    global latest_state, agents, cycle
+    global agents, latest_state, cycle
 
     while True:
         try:
-            # ✅ HEARTBEAT (YOU ASKED FOR THIS)
             last_heartbeat["t"] = time.time()
 
-            mkt = market()
+            mkt = safe_market()
             if not mkt:
                 time.sleep(2)
                 continue
@@ -142,54 +92,50 @@ def trading_loop():
             trades = []
             chop = detect_chop(mkt)
 
-            for symbol, data in mkt.items():
+            for s, d in mkt.items():
 
                 votes, weights = [], []
 
-                for name, agent in agents:
+                for n, a in agents:
                     try:
-                        action, conf = agent.decide(data)
+                        act, conf = a.decide(d)
                     except:
-                        action, conf = "HOLD", 0.5
+                        act, conf = "HOLD", 0.5
 
-                    votes.append((action, conf))
-                    weights.append(learn.weight(name))
+                    votes.append((act, conf))
+                    weights.append(learn.weight(n))
+
+                    # 🟢 STEP 1 — update agent heartbeat
+                    agent_heartbeat[n] = time.time()
 
                 action, conf = decide(votes, weights)
 
                 allowed = risk.approve(portfolio, action, conf)
 
                 if allowed:
-                    allowed = head_trader.approve_trade(
-                        symbol,
-                        action,
-                        conf,
-                        data,
-                        portfolio,
-                        chop
-                    )
+                    allowed = head_trader.approve_trade(s, action, conf, d, portfolio, chop)
 
                 if chop:
                     allowed = False
 
-                price = data["price"]
+                price = d["price"]
                 pnl = 0
 
                 if allowed:
                     if action == "BUY":
-                        portfolio.buy(symbol, price, conf)
+                        portfolio.buy(s, price, conf)
                     elif action == "SELL":
-                        portfolio.sell(symbol, price)
+                        portfolio.sell(s, price)
 
-                if trade_manager.check_exit(portfolio, symbol, price):
-                    portfolio.sell(symbol, price)
+                if trade_manager.check_exit(portfolio, s, price):
+                    portfolio.sell(s, price)
                     pnl = 1
 
-                for name, _ in agents:
-                    learn.update(name, pnl)
+                for n, _ in agents:
+                    learn.update(n, pnl)
 
                 trades.append({
-                    "symbol": symbol,
+                    "symbol": s,
                     "action": action,
                     "confidence": round(conf, 2),
                     "allowed": allowed,
@@ -201,13 +147,21 @@ def trading_loop():
             if cycle % 5 == 0:
                 agents = evolve_agents()
 
+            # =========================
+            # 🟢 STEP 5 — ACTIVE AGENTS FILTER
+            # =========================
+            active_agents = [
+                name for name, t in agent_heartbeat.items()
+                if time.time() - t < 30
+            ]
+
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
                 "agent_scores": learn.agent_score,
-                "active_agents": [a[0] for a in agents],
+                "active_agents": active_agents,
                 "chop_zone": chop,
-                "heartbeat": last_heartbeat["t"],  # ✅ THIS IS THE LINE YOU ASKED FOR
+                "heartbeat": last_heartbeat["t"],
                 "trades": trades[-20:]
             }
 
@@ -215,10 +169,11 @@ def trading_loop():
 
         except Exception as e:
             print("🔥 LOOP RECOVERED:", e)
+            latest_state["error"] = str(e)
             time.sleep(2)
 
 # =========================
-# START SYSTEM THREADS (IMPORTANT FIX)
+# START SYSTEM THREADS
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
@@ -226,64 +181,11 @@ threading.Thread(target=watchdog, daemon=True).start()
 # =========================
 # ROUTES
 # =========================
-@app.get("/")
-def home():
-    return {"status": "running"}
-
 @app.get("/state")
 def state():
     return latest_state
 
+
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return """
-    <html>
-    <head>
-        <title>AI Trading Terminal</title>
-        <style>
-            body { background:#0b0f14; color:white; font-family:monospace; }
-            .box { background:#111827; margin:10px; padding:10px; border-radius:8px; }
-        </style>
-    </head>
-
-    <body>
-        <h2>LIVE AI TRADING TERMINAL</h2>
-
-        <div class="box">
-            <h3>Equity: <span id="eq">...</span></h3>
-            <h3>Cash: <span id="cash">...</span></h3>
-            <h3>Chop Zone: <span id="chop">...</span></h3>
-        </div>
-
-        <div class="box">
-            <h3>Agents</h3>
-            <pre id="agents"></pre>
-        </div>
-
-        <div class="box">
-            <h3>Trades</h3>
-            <pre id="trades"></pre>
-        </div>
-
-        <script>
-            async function load(){
-                const r = await fetch("/state");
-                const d = await r.json();
-
-                document.getElementById("eq").innerText = d.equity;
-                document.getElementById("cash").innerText = d.cash;
-                document.getElementById("chop").innerText = d.chop_zone;
-
-                document.getElementById("agents").innerText =
-                    JSON.stringify(d.agent_scores || {}, null, 2);
-
-                document.getElementById("trades").innerText =
-                    JSON.stringify(d.trades || [], null, 2);
-            }
-
-            setInterval(load, 1500);
-            load();
-        </script>
-    </body>
-    </html>
-    """
+    return open("frontend.html").read()
