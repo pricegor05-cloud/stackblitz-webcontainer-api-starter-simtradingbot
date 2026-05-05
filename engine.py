@@ -6,19 +6,16 @@ import random
 class Portfolio:
     def __init__(self, cash=5000):
         self.cash = cash
-        self.positions = {}  # symbol -> {qty, entry}
+        self.positions = {}
         self.equity = cash
 
     def update(self, prices):
         total = self.cash
-
         for s, pos in self.positions.items():
             if s in prices:
                 total += pos["qty"] * prices[s]
-
         self.equity = total
 
-    # 🟢 POSITION SIZING BUY
     def buy(self, symbol, price, confidence=0.5):
         risk_budget = self.equity * 0.05
         size = risk_budget * max(0.2, min(confidence, 1.0))
@@ -34,7 +31,6 @@ class Portfolio:
             "entry": price
         }
 
-    # 🔴 EXIT POSITION
     def sell(self, symbol, price):
         if symbol in self.positions:
             pos = self.positions[symbol]
@@ -81,13 +77,13 @@ class LearningSystem:
     def weight(self, name):
         return self.agent_score[name]
 
-    def update(self, agent_name, pnl):
+    def update(self, name, pnl):
         if pnl > 0:
-            self.agent_score[agent_name] *= 1.02
+            self.agent_score[name] *= 1.02
         else:
-            self.agent_score[agent_name] *= 0.98
+            self.agent_score[name] *= 0.98
 
-        self.agent_score[agent_name] = max(0.3, min(3.0, self.agent_score[agent_name]))
+        self.agent_score[name] = max(0.3, min(3.0, self.agent_score[name]))
 
 
 # =========================
@@ -126,13 +122,10 @@ class Risk:
 def detect_reversal(data):
     if data["vol"] > 1.2:
         return -1
-
     if data["trend"] == "DOWN":
         return -1
-
     if data["trend"] == "UP" and data["vol"] < 0.8:
         return 1
-
     return 0
 
 
@@ -153,15 +146,12 @@ class TradeManager:
 
         change = (price - entry) / entry
 
-        # 🔴 early exit on reversal
         if trend_signal == -1 and change > 0.02:
             return True
 
-        # 🔴 stop loss
         if change <= -self.stop_loss:
             return True
 
-        # 🟢 take profit
         if change >= self.take_profit:
             return True
 
@@ -169,7 +159,7 @@ class TradeManager:
 
 
 # =========================
-# 🧬 STRATEGY EVOLUTION ENGINE
+# 🧬 EVOLUTION ENGINE
 # =========================
 class EvolutionEngine:
     def __init__(self, learning_system):
@@ -181,34 +171,28 @@ class EvolutionEngine:
         for name, agent in agents:
             score = self.learn.agent_score[name]
 
-            # 🟢 keep strong
             if score > 1.2:
                 new_agents.append((name, agent))
 
-            # 🔴 remove weak
             elif score < 0.8:
                 continue
 
-            # 🧬 mutate medium
             else:
                 mutated = self.mutate(agent)
                 new_name = name + "_v2"
                 new_agents.append((new_name, mutated))
-
                 self.learn.agent_score[new_name] = score * random.uniform(0.9, 1.1)
 
         return new_agents
 
     def mutate(self, agent):
-        class MutatedAgent:
+        class Mutated:
             def decide(self, d):
-                action, conf = agent.decide(d)
-
+                a, c = agent.decide(d)
                 if random.random() < 0.08:
                     return ("BUY", 0.9)
                 if random.random() < 0.08:
                     return ("SELL", 0.9)
+                return a, c
 
-                return action, conf
-
-        return MutatedAgent()
+        return Mutated()
