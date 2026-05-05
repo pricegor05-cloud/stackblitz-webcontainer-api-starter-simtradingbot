@@ -33,7 +33,7 @@ clients = []
 last_heartbeat = {"t": time.time()}
 
 # =========================
-# SAFE INITIAL STATE (FIXED)
+# SAFE STATE (NO CRASH DEFAULT)
 # =========================
 latest_state = {
     "equity": 5000,
@@ -46,7 +46,7 @@ latest_state = {
 }
 
 # =========================
-# RESET
+# RESET AGENTS
 # =========================
 def reset_agents():
     return [
@@ -57,17 +57,21 @@ def reset_agents():
     ]
 
 # =========================
-# WATCHDOG
+# WATCHDOG (SELF HEAL)
 # =========================
 def watchdog():
-    global agents
+    global agents, latest_state
 
     while True:
         time.sleep(10)
 
         if time.time() - last_heartbeat["t"] > 25:
+            print("⚠️ WATCHDOG RESET")
             agents = reset_agents()
             last_heartbeat["t"] = time.time()
+
+            # prevent UI freeze
+            latest_state["active_agents"] = [a[0] for a in agents]
 
 # =========================
 # CHOP DETECTOR
@@ -84,7 +88,7 @@ def detect_chop(mkt):
     return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
 # =========================
-# TRADING LOOP (FIXED)
+# TRADING LOOP (STABLE VERSION)
 # =========================
 def trading_loop():
     global agents, latest_state, cycle
@@ -103,7 +107,9 @@ def trading_loop():
             portfolio.update({s: mkt[s]["price"] for s in mkt})
 
             trades = []
-            chop = detect_chop(mkt)
+
+            # ALWAYS DEFINE CHOP SAFELY
+            chop = detect_chop(mkt) if mkt else False
 
             for symbol, data in mkt.items():
 
@@ -138,8 +144,10 @@ def trading_loop():
                         portfolio.buy(symbol, price, conf)
                     elif action == "SELL":
                         portfolio.sell(symbol, price)
+
                     pnl = conf
 
+                # UPDATE LEARNING SAFELY
                 for name, _ in agents:
                     learn.update(name, pnl)
                     analytics.update(name, pnl)
@@ -155,9 +163,15 @@ def trading_loop():
 
             cycle += 1
 
-            # safe evolution
-            agents = [(n, evolver.mutate(a)) for n, a in agents]
+            # SAFE EVOLUTION (NO BREAKING AGENTS)
+            try:
+                agents = [(n, evolver.mutate(a)) for n, a in agents]
+            except:
+                agents = reset_agents()
 
+            # =========================
+            # ALWAYS VALID STATE (FIX)
+            # =========================
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
@@ -165,17 +179,17 @@ def trading_loop():
                 "active_agents": [a[0] for a in agents],
                 "chop_zone": chop,
                 "heartbeat": last_heartbeat["t"],
-                "trades": trades[-20:]
+                "trades": trades[-20:] if trades else []
             }
 
             time.sleep(1.5)
 
         except Exception as e:
-            print("RECOVERED:", e)
+            print("RECOVERED LOOP:", e)
             time.sleep(1)
 
 # =========================
-# WEBSOCKET
+# WEBSOCKET STREAM
 # =========================
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
@@ -204,163 +218,4 @@ def state():
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-<title>PRO AI TRADING TERMINAL</title>
-
-<style>
-body {
-    margin:0;
-    background:#05070a;
-    color:#00ffcc;
-    font-family: monospace;
-}
-
-/* HEADER */
-.header {
-    padding:15px;
-    text-align:center;
-    font-size:20px;
-    border-bottom:1px solid #1f2937;
-    color:#00ffcc;
-}
-
-/* GRID */
-.grid {
-    display:grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap:12px;
-    padding:12px;
-}
-
-/* BOX STYLE */
-.box {
-    background:#0f172a;
-    padding:12px;
-    border-radius:10px;
-    box-shadow:0 0 10px rgba(0,255,200,0.08);
-}
-
-/* BIG NUMBER */
-.big {
-    font-size:26px;
-    font-weight:bold;
-}
-
-/* COLORS */
-.green { color:#00ff88; }
-.red { color:#ff4d4d; }
-.yellow { color:#ffd700; }
-
-/* SCROLL TAPE */
-.tape {
-    height:200px;
-    overflow:auto;
-    background:#0b1220;
-    padding:10px;
-    border-radius:10px;
-}
-
-/* TRADE ITEM */
-.trade {
-    border-bottom:1px solid #1f2937;
-    padding:5px 0;
-    font-size:12px;
-}
-</style>
-</head>
-
-<body>
-
-<div class="header">
-    🧠 PRO AI HEDGE FUND TERMINAL
-</div>
-
-<div class="grid">
-
-    <!-- EQUITY -->
-    <div class="box">
-        <div class="big">EQUITY</div>
-        <div id="equity">...</div>
-    </div>
-
-    <!-- CASH -->
-    <div class="box">
-        <div class="big">CASH</div>
-        <div id="cash">...</div>
-    </div>
-
-    <!-- CHOP -->
-    <div class="box">
-        <div class="big">MARKET</div>
-        <div id="chop">...</div>
-    </div>
-
-    <!-- AGENTS -->
-    <div class="box">
-        <div class="big">AGENTS</div>
-        <pre id="agents"></pre>
-    </div>
-
-    <!-- SCORES -->
-    <div class="box">
-        <div class="big">SCORES</div>
-        <pre id="scores"></pre>
-    </div>
-
-    <!-- LIVE PNL TAPE -->
-    <div class="box" style="grid-column: span 3;">
-        <div class="big">LIVE TRADE TAPE</div>
-        <div class="tape" id="trades"></div>
-    </div>
-
-</div>
-
-<script>
-
-async function load(){
-    const r = await fetch("/state");
-    const d = await r.json();
-
-    // EQUITY
-    document.getElementById("equity").innerHTML =
-        "<span class='green'>$" + (d.equity || 0).toFixed(2) + "</span>";
-
-    // CASH
-    document.getElementById("cash").innerText =
-        "$" + (d.cash || 0).toFixed(2);
-
-    // CHOP
-    document.getElementById("chop").innerHTML =
-        d.chop_zone ? "<span class='red'>CHOP MARKET</span>" : "<span class='green'>TRENDING</span>";
-
-    // AGENTS
-    document.getElementById("agents").innerText =
-        JSON.stringify(d.active_agents || [], null, 2);
-
-    // SCORES
-    document.getElementById("scores").innerText =
-        JSON.stringify(d.agent_scores || {}, null, 2);
-
-    // TRADE TAPE
-    let tape = "";
-    (d.trades || []).slice(-20).reverse().forEach(t => {
-        tape += `
-        <div class="trade">
-            ${t.symbol} | ${t.action} | ${t.price} | conf:${t.confidence}
-        </div>`;
-    });
-
-    document.getElementById("trades").innerHTML = tape;
-}
-
-setInterval(load, 1000);
-load();
-
-</script>
-
-</body>
-</html>
-"""
+    return open("frontend.html").read()
