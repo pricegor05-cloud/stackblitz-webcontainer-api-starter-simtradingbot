@@ -14,16 +14,13 @@ class Portfolio:
 
         for s, pos in self.positions.items():
             if s in prices:
-                price = prices[s]
-                total += pos["qty"] * price
+                total += pos["qty"] * prices[s]
 
         self.equity = total
 
-    # =========================
     # 🟢 POSITION SIZING BUY
-    # =========================
     def buy(self, symbol, price, confidence=0.5):
-        risk_budget = self.equity * 0.05  # 5% max risk per trade
+        risk_budget = self.equity * 0.05
         size = risk_budget * max(0.2, min(confidence, 1.0))
 
         if self.cash < size:
@@ -37,9 +34,7 @@ class Portfolio:
             "entry": price
         }
 
-    # =========================
     # 🔴 EXIT POSITION
-    # =========================
     def sell(self, symbol, price):
         if symbol in self.positions:
             pos = self.positions[symbol]
@@ -96,7 +91,7 @@ class LearningSystem:
 
 
 # =========================
-# 🧠 META DECIDER (FIXED)
+# 🧠 META DECIDER
 # =========================
 def decide(votes, weights):
     score = {"BUY": 0, "SELL": 0, "HOLD": 0}
@@ -105,7 +100,6 @@ def decide(votes, weights):
         score[action] += conf * w
 
     best = max(score, key=score.get)
-
     total = sum(score.values()) + 1e-9
     conf = score[best] / total
 
@@ -127,14 +121,30 @@ class Risk:
 
 
 # =========================
-# 🛑 TRADE MANAGER (STOP LOSS / TAKE PROFIT)
+# 🧠 TREND REVERSAL DETECTOR
+# =========================
+def detect_reversal(data):
+    if data["vol"] > 1.2:
+        return -1
+
+    if data["trend"] == "DOWN":
+        return -1
+
+    if data["trend"] == "UP" and data["vol"] < 0.8:
+        return 1
+
+    return 0
+
+
+# =========================
+# 🛑 TRADE MANAGER
 # =========================
 class TradeManager:
     def __init__(self):
         self.stop_loss = 0.03
         self.take_profit = 0.06
 
-    def check_exit(self, portfolio, symbol, price):
+    def check_exit(self, portfolio, symbol, price, trend_signal=0):
         if symbol not in portfolio.positions:
             return False
 
@@ -143,16 +153,23 @@ class TradeManager:
 
         change = (price - entry) / entry
 
+        # 🔴 early exit on reversal
+        if trend_signal == -1 and change > 0.02:
+            return True
+
+        # 🔴 stop loss
         if change <= -self.stop_loss:
             return True
 
+        # 🟢 take profit
         if change >= self.take_profit:
             return True
 
         return False
 
-        # =========================
-# 🧬 STRATEGY EVOLUTION ENGINE (STEP 1)
+
+# =========================
+# 🧬 STRATEGY EVOLUTION ENGINE
 # =========================
 class EvolutionEngine:
     def __init__(self, learning_system):
@@ -164,39 +181,34 @@ class EvolutionEngine:
         for name, agent in agents:
             score = self.learn.agent_score[name]
 
-            # 🟢 strong strategies survive
+            # 🟢 keep strong
             if score > 1.2:
                 new_agents.append((name, agent))
 
-            # 🔴 weak strategies removed
+            # 🔴 remove weak
             elif score < 0.8:
                 continue
 
-            # 🧬 medium strategies mutate
+            # 🧬 mutate medium
             else:
                 mutated = self.mutate(agent)
                 new_name = name + "_v2"
                 new_agents.append((new_name, mutated))
 
-                # inherit score with noise
                 self.learn.agent_score[new_name] = score * random.uniform(0.9, 1.1)
 
         return new_agents
 
-    # =========================
-    # 🧪 MUTATION LOGIC
-    # =========================
     def mutate(self, agent):
         class MutatedAgent:
             def decide(self, d):
-                base_action, base_conf = agent.decide(d)
+                action, conf = agent.decide(d)
 
-                # small random exploration (real trading concept)
                 if random.random() < 0.08:
                     return ("BUY", 0.9)
                 if random.random() < 0.08:
                     return ("SELL", 0.9)
 
-                return base_action, base_conf
+                return action, conf
 
         return MutatedAgent()
