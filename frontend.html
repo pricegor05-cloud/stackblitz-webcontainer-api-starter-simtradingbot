@@ -37,31 +37,43 @@
         <pre id="trades"></pre>
     </div>
 
-<script>
-const API = "https://stackblitz-webcontainer-api-starter-f0hz.onrender.com/state";
-
-async function loadData() {
-    try {
-        const res = await fetch(API);
-        const data = await res.json();
-
-        document.getElementById("equity").innerText = data.equity;
-        document.getElementById("cash").innerText = data.cash;
-
-        document.getElementById("agents").innerText =
-            JSON.stringify(data.agent_scores, null, 2);
-
-        document.getElementById("trades").innerText =
-            JSON.stringify(data.trades, null, 2);
-
-    } catch (err) {
-        console.log(err);
-    }
-}
-
-setInterval(loadData, 3000);
-loadData();
-</script>
-
-</body>
-</html>
+    <script>
+        let ws;
+        
+        function connectWS() {
+            ws = new WebSocket(`ws://${location.host}/ws`);
+        
+            ws.onopen = () => {
+                console.log("✅ Connected to WebSocket");
+            };
+        
+            ws.onmessage = (event) => {
+                const d = JSON.parse(event.data);
+        
+                document.getElementById("equity").innerHTML =
+                    "<span class='good'>$" + (d.equity || 0) + "</span>";
+        
+                document.getElementById("cash").innerHTML =
+                    "$" + (d.cash || 0);
+        
+                document.getElementById("chop").innerHTML =
+                    d.chop_zone ? "<span class='warn'>YES</span>" : "NO";
+        
+                document.getElementById("agents").innerText =
+                    JSON.stringify(d.active_agents || [], null, 2);
+        
+                document.getElementById("scores").innerText =
+                    JSON.stringify(d.agent_scores || {}, null, 2);
+        
+                document.getElementById("trades").innerText =
+                    JSON.stringify(d.trades || [], null, 2);
+            };
+        
+            ws.onclose = () => {
+                console.log("❌ WS Disconnected... reconnecting");
+                setTimeout(connectWS, 2000);
+            };
+        }
+        
+        connectWS();
+        </script>
