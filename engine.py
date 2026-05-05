@@ -4,11 +4,6 @@ import random
 from collections import defaultdict
 
 class Portfolio:
-    def compound(self):
-        gain = self.equity - 5000
-    if gain > 0:
-        self.cash += gain * 0.05  # reinvest profit slowly
-    
     def __init__(self, cash=5000):
         self.cash = cash
         self.positions = {}
