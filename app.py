@@ -1,8 +1,7 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse
 import threading
 import time
-import os
 import random
 
 from engine import (
@@ -23,13 +22,12 @@ from market_data import market
 app = FastAPI()
 
 # =========================
-# 🏦 CORE SYSTEM
+# CORE SYSTEM
 # =========================
 portfolio = Portfolio(5000)
 learn = LearningSystem()
 risk = Risk()
 trade_manager = TradeManager()
-
 evolver = EvolutionEngine(learn)
 
 agents = [
@@ -40,16 +38,15 @@ agents = [
 ]
 
 latest_state = {}
-
 cycle = 0
 MAX_AGENTS = 10
 
 
 # =========================
-# 🧬 EVOLUTION ENGINE (STEP 3 FIXED)
+# EVOLUTION (SAFE VERSION)
 # =========================
 def evolve_agents():
-    global agents, learn, evolver
+    global agents
 
     new_agents = []
     updated_scores = learn.agent_score.copy()
@@ -57,43 +54,51 @@ def evolve_agents():
     for name, agent in agents:
         score = learn.agent_score.get(name, 1.0)
 
+        # keep strong
         if score > 1.2:
             new_agents.append((name, agent))
 
+        # remove weak
         elif score < 0.8:
             continue
 
+        # mutate medium
         else:
             mutated = evolver.mutate(agent)
-            new_name = name + "_v2"
+            new_name = name + "_v2_" + str(random.randint(100, 999))
             new_agents.append((new_name, mutated))
-            updated_scores[new_name] = score * random.uniform(0.9, 1.1)
+            updated_scores[new_name] = score * random.uniform(0.95, 1.05)
 
+    # prevent explosion
     new_agents = sorted(
         new_agents,
         key=lambda x: learn.agent_score.get(x[0], 1.0),
         reverse=True
     )[:MAX_AGENTS]
 
-    clean_scores = {}
+    # CLEAN SCORE MAP (IMPORTANT FIX)
+    clean = {}
     for name, _ in new_agents:
-        clean_scores[name] = updated_scores.get(name, 1.0)
+        clean[name] = updated_scores.get(name, 1.0)
 
-    learn.agent_score = clean_scores
+    learn.agent_score = clean
 
     return new_agents
 
 
 # =========================
-# 🚀 TRADING LOOP
+# TRADING LOOP
 # =========================
 def trading_loop():
     global latest_state, agents, cycle
 
     while True:
         mkt = market()
-        prices = {s: mkt[s]["price"] for s in mkt}
+        if not mkt:
+            time.sleep(2)
+            continue
 
+        prices = {s: mkt[s]["price"] for s in mkt}
         portfolio.update(prices)
 
         trades = []
@@ -132,10 +137,9 @@ def trading_loop():
                 "action": action,
                 "confidence": round(conf, 2),
                 "allowed": allowed,
-                "price": price
+                "price": round(price, 2)
             })
 
-        # 🧬 EVOLVE EVERY 5 CYCLES
         cycle += 1
         if cycle % 5 == 0:
             agents = evolve_agents()
@@ -146,21 +150,21 @@ def trading_loop():
             "positions": portfolio.positions,
             "agent_scores": learn.agent_score,
             "active_agents": [a[0] for a in agents],
-            "trades": trades
+            "trades": trades[-20:]
         }
 
-        time.sleep(30)
+        time.sleep(5)
 
 
 threading.Thread(target=trading_loop, daemon=True).start()
 
 
 # =========================
-# 🌐 ROUTES
+# ROUTES
 # =========================
 @app.get("/")
 def home():
-    return {"status": "AI Hedge Fund Running"}
+    return {"status": "running"}
 
 
 @app.get("/state")
@@ -168,221 +172,57 @@ def state():
     return latest_state
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
-def dashboard():
-    return """
-    <html>
-    <head>
-        <title>Institutional AI Trading Terminal</title>
-        <meta http-equiv="refresh" content="2">
-
-        <style>
-            body {
-                margin: 0;
-                background: #0b0f14;
-                color: #d1d5db;
-                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            }
-
-            .topbar {
-                background: #111827;
-                padding: 12px 20px;
-                font-size: 14px;
-                border-bottom: 1px solid #1f2937;
-            }
-
-            .grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr 1fr;
-                gap: 12px;
-                padding: 12px;
-            }
-
-            .panel {
-                background: #111827;
-                border: 1px solid #1f2937;
-                border-radius: 8px;
-                padding: 12px;
-                height: 280px;
-                overflow: auto;
-            }
-
-            .title {
-                font-size: 12px;
-                color: #9ca3af;
-                margin-bottom: 8px;
-            }
-
-            .value {
-                font-size: 18px;
-                color: #22c55e;
-            }
-
-            .red { color: #ef4444; }
-            .yellow { color: #facc15; }
-            .cyan { color: #22d3ee; }
-
-            table {
-                width: 100%;
-                font-size: 12px;
-            }
-
-            td {
-                padding: 4px 0;
-                border-bottom: 1px solid #1f2937;
-            }
-
-            .footer {
-                padding: 10px 20px;
-                font-size: 11px;
-                color: #6b7280;
-                border-top: 1px solid #1f2937;
-            }
-        </style>
-    </head>
-
-    <body>
-
-        <div class="topbar">
-            🏦 AI HEDGE FUND TERMINAL | LIVE SIMULATION | REFRESH 2s
-        </div>
-
-        <div class="grid">
-
-            <div class="panel">
-                <div class="title">PORTFOLIO EQUITY</div>
-                <div class="value">$""" + str(latest_state.get("equity", 0)) + """</div>
-
-                <div class="title" style="margin-top:10px;">CASH</div>
-                <div class="value cyan">$""" + str(latest_state.get("cash", 0)) + """</div>
-            </div>
-
-            <div class="panel">
-                <div class="title">ACTIVE AGENTS</div>
-                <table>
-                """ + "".join([
-                    f"<tr><td>{k}</td><td class='yellow'>{v:.2f}</td></tr>"
-                    for k, v in (latest_state.get("agent_scores") or {}).items()
-                ]) + """
-                </table>
-            </div>
-
-            <div class="panel">
-                <div class="title">ACTIVE STRATEGIES</div>
-                """ + "<br>".join(latest_state.get("active_agents", [])) + """
-            </div>
-
-        </div>
-
-        <div class="grid">
-
-            <div class="panel" style="grid-column: span 3;">
-                <div class="title">TRADE EXECUTION FEED</div>
-                <table>
-                """ + "".join([
-                    f"<tr>"
-                    f"<td>{t['symbol']}</td>"
-                    f"<td>{t['action']}</td>"
-                    f"<td class='cyan'>{t['confidence']}</td>"
-                    f"<td>{t['price']:.2f}</td>"
-                    f"</tr>"
-                    for t in (latest_state.get("trades") or [])[-15:]
-                ]) + """
-                </table>
-            </div>
-
-        </div>
-
-        <div class="footer">
-            AI Hedge Fund Simulation Engine | Institutional Terminal UI | Paper Trading Mode
-        </div>
-
-    </body>
-    </html>
-    """
-
-
+# =========================
+# FIXED UI (NO STRING BUGS)
+# =========================
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
     return """
     <html>
     <head>
-        <title>AI Trading Terminal v2</title>
-
+        <title>AI Trading Terminal</title>
         <style>
-            body {
-                background: #0b0f14;
-                color: #d1d5db;
-                font-family: monospace;
-                margin: 0;
-            }
-
-            .top {
-                padding: 10px;
-                background: #111827;
-                border-bottom: 1px solid #1f2937;
-            }
-
-            .grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 10px;
-                padding: 10px;
-            }
-
-            .box {
-                background: #111827;
-                padding: 10px;
-                border-radius: 6px;
-                border: 1px solid #1f2937;
-            }
-
-            .cyan { color: #22d3ee; }
+            body { background:#0b0f14; color:white; font-family:monospace; }
+            .box { background:#111827; margin:10px; padding:10px; border-radius:8px; }
         </style>
     </head>
 
     <body>
-        <div class="top">🏦 LIVE AI HEDGE FUND TERMINAL</div>
+        <h2>LIVE AI TRADING TERMINAL</h2>
 
-        <div class="grid">
-            <div class="box">
-                <div>Equity</div>
-                <h2 id="equity">...</h2>
-
-                <div>Cash</div>
-                <h3 id="cash">...</h3>
-            </div>
-
-            <div class="box">
-                <div>Agents</div>
-                <pre id="agents"></pre>
-            </div>
+        <div class="box">
+            <h3>Equity: <span id="eq">...</span></h3>
+            <h3>Cash: <span id="cash">...</span></h3>
         </div>
 
-        <div class="box" style="margin:10px;">
-            <div>Trades</div>
+        <div class="box">
+            <h3>Agents</h3>
+            <pre id="agents"></pre>
+        </div>
+
+        <div class="box">
+            <h3>Trades</h3>
             <pre id="trades"></pre>
         </div>
 
         <script>
-            async function load() {
-                const res = await fetch("/state");
-                const data = await res.json();
+            async function load(){
+                const r = await fetch("/state");
+                const d = await r.json();
 
-                document.getElementById("equity").innerText = data.equity;
-                document.getElementById("cash").innerText = data.cash;
+                document.getElementById("eq").innerText = d.equity;
+                document.getElementById("cash").innerText = d.cash;
 
                 document.getElementById("agents").innerText =
-                    JSON.stringify(data.agent_scores, null, 2);
+                    JSON.stringify(d.agent_scores || {}, null, 2);
 
                 document.getElementById("trades").innerText =
-                    JSON.stringify(data.trades.slice(-10), null, 2);
+                    JSON.stringify(d.trades || [], null, 2);
             }
 
             setInterval(load, 1500);
             load();
         </script>
-
     </body>
     </html>
     """
