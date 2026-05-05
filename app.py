@@ -1,6 +1,6 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
-import threading, time, asyncio
+import threading, time, random, asyncio
 
 from engine import *
 from stream_market import market
@@ -28,13 +28,6 @@ agents = [
     ("SentimentAI", SentimentAI())
 ]
 
-cycle = 0
-clients = []
-last_heartbeat = {"t": time.time()}
-
-# =========================
-# SAFE STATE (NO CRASH DEFAULT)
-# =========================
 latest_state = {
     "equity": 5000,
     "cash": 5000,
@@ -45,8 +38,26 @@ latest_state = {
     "trades": []
 }
 
+cycle = 0
+clients = []
+last_heartbeat = {"t": time.time()}
+
 # =========================
-# RESET AGENTS
+# 📊 DAY TRADING CONTROLS (NEW)
+# =========================
+daily_stats = {
+    "trades": 0,
+    "start_equity": 5000,
+    "profit": 0
+}
+
+MAX_TRADES = 10
+DAILY_TARGET = 100
+DAILY_STOP = -50
+
+
+# =========================
+# RESET
 # =========================
 def reset_agents():
     return [
@@ -56,22 +67,18 @@ def reset_agents():
         ("SentimentAI", SentimentAI())
     ]
 
+
 # =========================
-# WATCHDOG (SELF HEAL)
+# WATCHDOG
 # =========================
 def watchdog():
-    global agents, latest_state
-
+    global agents
     while True:
         time.sleep(10)
-
         if time.time() - last_heartbeat["t"] > 25:
-            print("⚠️ WATCHDOG RESET")
             agents = reset_agents()
             last_heartbeat["t"] = time.time()
 
-            # prevent UI freeze
-            latest_state["active_agents"] = [a[0] for a in agents]
 
 # =========================
 # CHOP DETECTOR
@@ -87,8 +94,9 @@ def detect_chop(mkt):
 
     return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
+
 # =========================
-# TRADING LOOP (STABLE VERSION)
+# TRADING LOOP (DAY TRADER ENGINE)
 # =========================
 def trading_loop():
     global agents, latest_state, cycle
@@ -104,13 +112,24 @@ def trading_loop():
                 time.sleep(1)
                 continue
 
-            portfolio.update({s: mkt[s]["price"] for s in mkt})
+            prices = {s: mkt[s]["price"] for s in mkt}
+            portfolio.update(prices)
 
             trades = []
+            chop = detect_chop(mkt)
 
-            # ALWAYS DEFINE CHOP SAFELY
-            chop = detect_chop(mkt) if mkt else False
+            # =========================
+            # DAILY RESET (SIMULATED DAY)
+            # =========================
+            if cycle % 200 == 0:
+                daily_stats["trades"] = 0
+                daily_stats["start_equity"] = portfolio.equity
 
+            daily_stats["profit"] = portfolio.equity - daily_stats["start_equity"]
+
+            # =========================
+            # STOCK LOOP
+            # =========================
             for symbol, data in mkt.items():
 
                 votes, weights = [], []
@@ -136,18 +155,30 @@ def trading_loop():
                 if chop:
                     allowed = False
 
+                # =========================
+                # 🛑 DAY TRADING LIMITS (NEW)
+                # =========================
+                if (
+                    daily_stats["trades"] >= MAX_TRADES or
+                    daily_stats["profit"] >= DAILY_TARGET or
+                    daily_stats["profit"] <= DAILY_STOP
+                ):
+                    allowed = False
+
                 price = data["price"]
                 pnl = 0
 
                 if allowed:
                     if action == "BUY":
                         portfolio.buy(symbol, price, conf)
+                        daily_stats["trades"] += 1
+
                     elif action == "SELL":
                         portfolio.sell(symbol, price)
+                        daily_stats["trades"] += 1
 
                     pnl = conf
 
-                # UPDATE LEARNING SAFELY
                 for name, _ in agents:
                     learn.update(name, pnl)
                     analytics.update(name, pnl)
@@ -158,20 +189,14 @@ def trading_loop():
                     "confidence": round(conf, 2),
                     "allowed": allowed,
                     "price": round(price, 2),
-                    "sharpe": {n: analytics.sharpe(n) for n, _ in agents}
+                    "daily_trades": daily_stats["trades"],
+                    "daily_profit": round(daily_stats["profit"], 2)
                 })
 
             cycle += 1
 
-            # SAFE EVOLUTION (NO BREAKING AGENTS)
-            try:
-                agents = [(n, evolver.mutate(a)) for n, a in agents]
-            except:
-                agents = reset_agents()
+            agents = [(name, evolver.mutate(agent)) for name, agent in agents]
 
-            # =========================
-            # ALWAYS VALID STATE (FIX)
-            # =========================
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
@@ -179,35 +204,29 @@ def trading_loop():
                 "active_agents": [a[0] for a in agents],
                 "chop_zone": chop,
                 "heartbeat": last_heartbeat["t"],
-                "trades": trades[-20:] if trades else []
+                "trades": trades[-20:],
+
+                # =========================
+                # LIVE DAY TRADING STATS
+                # =========================
+                "daily_trades": daily_stats["trades"],
+                "daily_profit": round(daily_stats["profit"], 2),
+                "daily_target": DAILY_TARGET
             }
 
-            time.sleep(1.5)
+            time.sleep(1.2)
 
         except Exception as e:
-            print("RECOVERED LOOP:", e)
+            print("RECOVERED:", e)
             time.sleep(1)
 
-# =========================
-# WEBSOCKET STREAM
-# =========================
-@app.websocket("/ws")
-async def ws(websocket: WebSocket):
-    await websocket.accept()
-    clients.append(websocket)
-
-    try:
-        while True:
-            await websocket.send_json(latest_state)
-            await asyncio.sleep(1)
-    except:
-        clients.remove(websocket)
 
 # =========================
-# START SYSTEM
+# START THREADS
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
+
 
 # =========================
 # ROUTES
@@ -216,6 +235,60 @@ threading.Thread(target=watchdog, daemon=True).start()
 def state():
     return latest_state
 
+
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return open("frontend.html").read()
+    return """
+    <html>
+    <head>
+        <title>AI Day Trading Terminal</title>
+        <style>
+            body { background:#0b0f14; color:white; font-family:monospace; }
+            .box { background:#111827; margin:10px; padding:10px; border-radius:8px; }
+        </style>
+    </head>
+
+    <body>
+        <h2>LIVE DAY TRADING AI</h2>
+
+        <div class="box">
+            <h3>Equity: <span id="eq">...</span></h3>
+            <h3>Cash: <span id="cash">...</span></h3>
+            <h3>Daily Profit: <span id="profit">...</span></h3>
+            <h3>Trades Today: <span id="trades">...</span></h3>
+        </div>
+
+        <div class="box">
+            <h3>Agents</h3>
+            <pre id="agents"></pre>
+        </div>
+
+        <div class="box">
+            <h3>Live Trades</h3>
+            <pre id="log"></pre>
+        </div>
+
+        <script>
+            async function load(){
+                const r = await fetch("/state");
+                const d = await r.json();
+
+                document.getElementById("eq").innerText = d.equity;
+                document.getElementById("cash").innerText = d.cash;
+
+                document.getElementById("profit").innerText = d.daily_profit;
+                document.getElementById("trades").innerText = d.daily_trades;
+
+                document.getElementById("agents").innerText =
+                    JSON.stringify(d.agent_scores, null, 2);
+
+                document.getElementById("log").innerText =
+                    JSON.stringify(d.trades || [], null, 2);
+            }
+
+            setInterval(load, 1000);
+            load();
+        </script>
+    </body>
+    </html>
+    """
