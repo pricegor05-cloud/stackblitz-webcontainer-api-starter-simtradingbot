@@ -1,3 +1,5 @@
+from collections import defaultdict, deque
+import math
 import random
 
 class Portfolio:
