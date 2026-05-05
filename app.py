@@ -304,7 +304,92 @@ def dashboard():
 
 @app.get("/ui")
 def ui():
-    file_path = "frontend.html"
-    if os.path.exists(file_path):
-        return FileResponse(file_path)
-    return {"error": "frontend.html not found"}
+    return """
+    <html>
+    <head>
+        <title>AI Trading Terminal v2</title>
+
+        <style>
+            body {
+                background: #0b0f14;
+                color: #d1d5db;
+                font-family: monospace;
+                margin: 0;
+            }
+
+            .top {
+                padding: 10px;
+                background: #111827;
+                border-bottom: 1px solid #1f2937;
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 10px;
+                padding: 10px;
+            }
+
+            .box {
+                background: #111827;
+                padding: 10px;
+                border-radius: 6px;
+                border: 1px solid #1f2937;
+            }
+
+            .green { color: #22c55e; }
+            .red { color: #ef4444; }
+            .cyan { color: #22d3ee; }
+        </style>
+    </head>
+
+    <body>
+
+        <div class="top">
+            🏦 LIVE AI HEDGE FUND TERMINAL
+        </div>
+
+        <div class="grid">
+
+            <div class="box">
+                <div>Equity</div>
+                <h2 id="equity">...</h2>
+
+                <div>Cash</div>
+                <h3 id="cash">...</h3>
+            </div>
+
+            <div class="box">
+                <div>Agents</div>
+                <pre id="agents"></pre>
+            </div>
+
+        </div>
+
+        <div class="box" style="margin:10px;">
+            <div>Latest Trades</div>
+            <pre id="trades"></pre>
+        </div>
+
+        <script>
+            async function load() {
+                const res = await fetch("/state");
+                const data = await res.json();
+
+                document.getElementById("equity").innerText = data.equity;
+                document.getElementById("cash").innerText = data.cash;
+
+                document.getElementById("agents").innerText =
+                    JSON.stringify(data.agent_scores, null, 2);
+
+                document.getElementById("trades").innerText =
+                    JSON.stringify(data.trades.slice(-10), null, 2);
+            }
+
+            setInterval(load, 1500);
+            load();
+        </script>
+
+    </body>
+    </html>
+    """
