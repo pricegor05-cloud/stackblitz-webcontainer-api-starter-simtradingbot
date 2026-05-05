@@ -302,7 +302,7 @@ def dashboard():
     """
 
 
-@app.get("/ui")
+@app.get("/ui", response_class=HTMLResponse)
 def ui():
     return """
     <html>
@@ -337,20 +337,14 @@ def ui():
                 border: 1px solid #1f2937;
             }
 
-            .green { color: #22c55e; }
-            .red { color: #ef4444; }
             .cyan { color: #22d3ee; }
         </style>
     </head>
 
     <body>
-
-        <div class="top">
-            🏦 LIVE AI HEDGE FUND TERMINAL
-        </div>
+        <div class="top">🏦 LIVE AI HEDGE FUND TERMINAL</div>
 
         <div class="grid">
-
             <div class="box">
                 <div>Equity</div>
                 <h2 id="equity">...</h2>
@@ -363,11 +357,10 @@ def ui():
                 <div>Agents</div>
                 <pre id="agents"></pre>
             </div>
-
         </div>
 
         <div class="box" style="margin:10px;">
-            <div>Latest Trades</div>
+            <div>Trades</div>
             <pre id="trades"></pre>
         </div>
 
