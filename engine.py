@@ -202,30 +202,36 @@ class EvolutionEngine:
 # =========================
 
 class HeadTrader:
-    """
-    Overrides AI when trades are dumb or risky.
-    This is your 'risk desk'.
-    """
+    def __init__(self):
+        self.cooldown = {}
 
-    def approve_trade(self, symbol, action, conf, data, portfolio):
-        
-        price = data["price"]
-        momentum = data.get("momentum", 0)
+    def approve_trade(self, symbol, action, conf, data, portfolio, chop):
+        """
+        Head trader override layer:
+        - blocks bad trades
+        - reduces trading in chop zones
+        - enforces institutional discipline
+        """
 
-        # ❌ BLOCK WEAK SIGNALS
+        price = data.get("price", 0)
+        trend = data.get("trend", "FLAT")
+        vol = data.get("vol", 1)
+
+        # 🟡 1. CHOP ZONE = NO TRADING
+        if chop:
+            return False
+
+        # 🟠 2. LOW CONFIDENCE BLOCK
         if conf < 0.60:
             return False
 
-        # ❌ BLOCK REVERSAL TRADES
-        if momentum < -0.02 and action == "BUY":
+        # 🔴 3. DON'T BUY INTO STRONG DOWN TRENDS
+        if action == "BUY" and trend == "DOWN" and vol > 1.1:
             return False
 
-        # ❌ DO NOT SELL INTO STRONG UP MOMENTUM
-        if momentum > 0.03 and action == "SELL":
+        # 🔴 4. DON'T SELL INTO STRONG UP TRENDS
+        if action == "SELL" and trend == "UP" and vol > 1.1:
             return False
 
-        # ❌ OVEREXPOSURE CONTROL
-        if portfolio.equity < 4500:
-            return False
-
+        # 🟢 5. SIMPLE “INSTITUTIONAL FILTER PASS”
         return True
