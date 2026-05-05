@@ -40,37 +40,55 @@
     <script>
         let ws;
         
+        const safe = (v, d) => (v === undefined || v === null ? d : v);
+        
         function connectWS() {
             ws = new WebSocket(`ws://${location.host}/ws`);
         
             ws.onopen = () => {
-                console.log("✅ Connected to WebSocket");
+                console.log("✅ WS Connected");
             };
         
             ws.onmessage = (event) => {
-                const d = JSON.parse(event.data);
+                try {
+                    const d = JSON.parse(event.data) || {};
         
-                document.getElementById("equity").innerHTML =
-                    "<span class='good'>$" + (d.equity || 0) + "</span>";
+                    const equity = safe(d.equity, 0);
+                    const cash = safe(d.cash, 0);
+                    const chop = safe(d.chop_zone, false);
+                    const agents = safe(d.active_agents, []);
+                    const scores = safe(d.agent_scores, {});
+                    const trades = safe(d.trades, []);
         
-                document.getElementById("cash").innerHTML =
-                    "$" + (d.cash || 0);
+                    document.getElementById("equity").innerHTML =
+                        "<span class='good'>$" + equity + "</span>";
         
-                document.getElementById("chop").innerHTML =
-                    d.chop_zone ? "<span class='warn'>YES</span>" : "NO";
+                    document.getElementById("cash").innerHTML =
+                        "$" + cash;
         
-                document.getElementById("agents").innerText =
-                    JSON.stringify(d.active_agents || [], null, 2);
+                    document.getElementById("chop").innerHTML =
+                        chop ? "<span class='warn'>YES</span>" : "NO";
         
-                document.getElementById("scores").innerText =
-                    JSON.stringify(d.agent_scores || {}, null, 2);
+                    document.getElementById("agents").innerText =
+                        JSON.stringify(agents, null, 2);
         
-                document.getElementById("trades").innerText =
-                    JSON.stringify(d.trades || [], null, 2);
+                    document.getElementById("scores").innerText =
+                        JSON.stringify(scores, null, 2);
+        
+                    document.getElementById("trades").innerText =
+                        JSON.stringify(trades, null, 2);
+        
+                } catch (err) {
+                    console.log("⚠️ UI parse fail:", err);
+                }
+            };
+        
+            ws.onerror = () => {
+                console.log("⚠️ WS error");
             };
         
             ws.onclose = () => {
-                console.log("❌ WS Disconnected... reconnecting");
+                console.log("❌ WS closed, reconnecting...");
                 setTimeout(connectWS, 2000);
             };
         }

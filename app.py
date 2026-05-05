@@ -28,7 +28,26 @@ agents = [
     ("SentimentAI", SentimentAI())
 ]
 
-latest_state = {}
+latest_state = {
+    "equity": 5000,
+    "cash": 5000,
+    "agent_scores": {},
+    "active_agents": [],
+    "chop_zone": False,
+    "heartbeat": time.time(),
+    "trades": []
+}
+
+latest_state.update({
+    "equity": round(portfolio.equity, 2),
+    "cash": round(portfolio.cash, 2),
+    "agent_scores": learn.agent_score,
+    "active_agents": [a[0] for a in agents],
+    "chop_zone": chop,
+    "heartbeat": time.time(),
+    "trades": trades[-20:]
+})
+
 cycle = 0
 clients = []
 last_heartbeat = {"t": time.time()}
@@ -146,7 +165,7 @@ def trading_loop():
             cycle += 1
 
             # 🧬 ALWAYS EVOLVE (NOT STOPPED EVERY 5 TICKS ONLY)
-            agents = evolve_agents()
+            agents = [(name, evolver.mutate(agent)) for name, agent in agents]
 
             latest_state = {
                 "equity": round(portfolio.equity, 2),
