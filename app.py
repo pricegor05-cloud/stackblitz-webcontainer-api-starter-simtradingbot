@@ -3,7 +3,6 @@ from fastapi.responses import HTMLResponse
 import threading
 import time
 import random
-from engine import HeadTrader
 
 from engine import (
     Portfolio,
@@ -15,6 +14,7 @@ from engine import (
     Risk,
     TradeManager,
     EvolutionEngine,
+    HeadTrader,
     decide
 )
 
@@ -45,7 +45,28 @@ MAX_AGENTS = 10
 
 
 # =========================
-# EVOLUTION (SAFE VERSION)
+# 🧠 STEP 4 — CHOP ZONE DETECTOR
+# =========================
+def detect_chop(mkt):
+    vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
+    trends = [mkt[s]["trend"] for s in mkt]
+
+    if not vols:
+        return False
+
+    avg_vol = sum(vols) / len(vols)
+    up = trends.count("UP")
+    down = trends.count("DOWN")
+
+    # 🟡 CHOP CONDITIONS
+    if avg_vol < 0.9 and abs(up - down) < len(trends) * 0.2:
+        return True
+
+    return False
+
+
+# =========================
+# 🧬 STEP 3 — SAFE EVOLUTION
 # =========================
 def evolve_agents():
     global agents
@@ -56,46 +77,45 @@ def evolve_agents():
     for name, agent in agents:
         score = learn.agent_score.get(name, 1.0)
 
-        # keep strong
+        # strong survive
         if score > 1.2:
             new_agents.append((name, agent))
 
-        # remove weak
+        # weak removed
         elif score < 0.8:
             continue
 
-        # mutate medium
+        # mutate
         else:
             mutated = evolver.mutate(agent)
             new_name = name + "_v2_" + str(random.randint(100, 999))
             new_agents.append((new_name, mutated))
             updated_scores[new_name] = score * random.uniform(0.95, 1.05)
 
-    # prevent explosion
+    # cap system size
     new_agents = sorted(
         new_agents,
         key=lambda x: learn.agent_score.get(x[0], 1.0),
         reverse=True
     )[:MAX_AGENTS]
 
-    # CLEAN SCORE MAP (IMPORTANT FIX)
     clean = {}
     for name, _ in new_agents:
         clean[name] = updated_scores.get(name, 1.0)
 
     learn.agent_score = clean
-
     return new_agents
 
 
 # =========================
-# TRADING LOOP
+# 🚀 TRADING LOOP
 # =========================
 def trading_loop():
     global latest_state, agents, cycle
 
     while True:
         mkt = market()
+
         if not mkt:
             time.sleep(2)
             continue
@@ -105,31 +125,44 @@ def trading_loop():
 
         trades = []
 
+        # 🟡 STEP 4 — CHOP ZONE FILTER
+        chop = detect_chop(mkt)
+
         for symbol, data in mkt.items():
 
             votes = []
             weights = []
 
             for name, agent in agents:
-                action, conf = agent.decide(data)
+                try:
+                    action, conf = agent.decide(data)
+                except:
+                    action, conf = "HOLD", 0.5
+
                 votes.append((action, conf))
                 weights.append(learn.weight(name))
 
             action, conf = decide(votes, weights)
-            # 🟡 RISK ENGINE FIRST
+
+            # 🧠 HEAD TRADER OVERRIDE (STEP 4)
             allowed = risk.approve(portfolio, action, conf)
-            # 🧠 HEAD TRADER FINAL AUTHORITY (STEP 3)
+
             if allowed:
                 allowed = head_trader.approve_trade(
                     symbol,
                     action,
                     conf,
                     data,
-                    portfolio
-    )
+                    portfolio,
+                    chop  # 🟡 passes chop zone signal
+                )
 
             price = data["price"]
             pnl = 0
+
+            # 🛑 CHOP PROTECTION: block trading completely
+            if chop:
+                allowed = False
 
             if allowed:
                 if action == "BUY":
@@ -149,10 +182,12 @@ def trading_loop():
                 "action": action,
                 "confidence": round(conf, 2),
                 "allowed": allowed,
-                "price": round(price, 2)
+                "price": round(price, 2),
+                "chop_zone": chop
             })
 
         cycle += 1
+
         if cycle % 5 == 0:
             agents = evolve_agents()
 
@@ -162,6 +197,7 @@ def trading_loop():
             "positions": portfolio.positions,
             "agent_scores": learn.agent_score,
             "active_agents": [a[0] for a in agents],
+            "chop_zone": chop,
             "trades": trades[-20:]
         }
 
@@ -184,9 +220,6 @@ def state():
     return latest_state
 
 
-# =========================
-# FIXED UI (NO STRING BUGS)
-# =========================
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
     return """
@@ -205,6 +238,7 @@ def ui():
         <div class="box">
             <h3>Equity: <span id="eq">...</span></h3>
             <h3>Cash: <span id="cash">...</span></h3>
+            <h3>Chop Zone: <span id="chop">...</span></h3>
         </div>
 
         <div class="box">
@@ -224,6 +258,7 @@ def ui():
 
                 document.getElementById("eq").innerText = d.equity;
                 document.getElementById("cash").innerText = d.cash;
+                document.getElementById("chop").innerText = d.chop_zone;
 
                 document.getElementById("agents").innerText =
                     JSON.stringify(d.agent_scores || {}, null, 2);
