@@ -173,18 +173,130 @@ def dashboard():
     return """
     <html>
     <head>
-        <title>AI Hedge Fund</title>
-        <meta http-equiv="refresh" content="5">
+        <title>Institutional AI Trading Terminal</title>
+        <meta http-equiv="refresh" content="2">
+
         <style>
-            body { background:#0f0f0f; color:white; font-family:Arial; }
-            .box { background:#1e1e1e; padding:20px; margin:10px; border-radius:10px; }
+            body {
+                margin: 0;
+                background: #0b0f14;
+                color: #d1d5db;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            }
+
+            .topbar {
+                background: #111827;
+                padding: 12px 20px;
+                font-size: 14px;
+                border-bottom: 1px solid #1f2937;
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 12px;
+                padding: 12px;
+            }
+
+            .panel {
+                background: #111827;
+                border: 1px solid #1f2937;
+                border-radius: 8px;
+                padding: 12px;
+                height: 280px;
+                overflow: auto;
+            }
+
+            .title {
+                font-size: 12px;
+                color: #9ca3af;
+                margin-bottom: 8px;
+            }
+
+            .value {
+                font-size: 18px;
+                color: #22c55e;
+            }
+
+            .red { color: #ef4444; }
+            .yellow { color: #facc15; }
+            .cyan { color: #22d3ee; }
+
+            table {
+                width: 100%;
+                font-size: 12px;
+            }
+
+            td {
+                padding: 4px 0;
+                border-bottom: 1px solid #1f2937;
+            }
+
+            .footer {
+                padding: 10px 20px;
+                font-size: 11px;
+                color: #6b7280;
+                border-top: 1px solid #1f2937;
+            }
         </style>
     </head>
+
     <body>
-        <h1>🏦 AI Hedge Fund Simulator</h1>
-        <div class="box">
-            <a href="/state" style="color:cyan">View Live Data</a>
+
+        <div class="topbar">
+            🏦 AI HEDGE FUND TERMINAL | LIVE SIMULATION | REFRESH 2s
         </div>
+
+        <div class="grid">
+
+            <div class="panel">
+                <div class="title">PORTFOLIO EQUITY</div>
+                <div class="value">$""" + str(latest_state.get("equity", 0)) + """</div>
+
+                <div class="title" style="margin-top:10px;">CASH</div>
+                <div class="value cyan">$""" + str(latest_state.get("cash", 0)) + """</div>
+            </div>
+
+            <div class="panel">
+                <div class="title">ACTIVE AGENTS</div>
+                <table>
+                """ + "".join([
+                    f"<tr><td>{k}</td><td class='yellow'>{v:.2f}</td></tr>"
+                    for k, v in (latest_state.get("agent_scores") or {}).items()
+                ]) + """
+                </table>
+            </div>
+
+            <div class="panel">
+                <div class="title">ACTIVE STRATEGIES</div>
+                """ + "<br>".join(latest_state.get("active_agents", [])) + """
+            </div>
+
+        </div>
+
+        <div class="grid">
+
+            <div class="panel" style="grid-column: span 3;">
+                <div class="title">TRADE EXECUTION FEED</div>
+                <table>
+                """ + "".join([
+                    f"<tr>"
+                    f"<td>{t['symbol']}</td>"
+                    f"<td>{t['action']}</td>"
+                    f"<td class='cyan'>{t['confidence']}</td>"
+                    f"<td>{t['price']:.2f}</td>"
+                    f"</tr>"
+                    for t in (latest_state.get("trades") or [])[-15:]
+                ]) + """
+                </table>
+            </div>
+
+        </div>
+
+        <div class="footer">
+            AI Hedge Fund Simulation Engine | Institutional Terminal UI | Paper Trading Mode
+        </div>
+
     </body>
     </html>
     """
