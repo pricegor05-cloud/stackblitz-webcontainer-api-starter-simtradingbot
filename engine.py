@@ -196,3 +196,36 @@ class EvolutionEngine:
                 return a, c
 
         return Mutated()
+
+        # =========================
+# 🧠 HEAD TRADER OVERRIDE (INSTITUTIONAL CONTROL LAYER)
+# =========================
+
+class HeadTrader:
+    """
+    Overrides AI when trades are dumb or risky.
+    This is your 'risk desk'.
+    """
+
+    def approve_trade(self, symbol, action, conf, data, portfolio):
+        
+        price = data["price"]
+        momentum = data.get("momentum", 0)
+
+        # ❌ BLOCK WEAK SIGNALS
+        if conf < 0.60:
+            return False
+
+        # ❌ BLOCK REVERSAL TRADES
+        if momentum < -0.02 and action == "BUY":
+            return False
+
+        # ❌ DO NOT SELL INTO STRONG UP MOMENTUM
+        if momentum > 0.03 and action == "SELL":
+            return False
+
+        # ❌ OVEREXPOSURE CONTROL
+        if portfolio.equity < 4500:
+            return False
+
+        return True

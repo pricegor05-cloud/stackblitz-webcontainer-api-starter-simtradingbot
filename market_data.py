@@ -1,37 +1,14 @@
 import yfinance as yf
-import pandas as pd
+
+# =========================
+# 📡 MARKET SCANNER V3
+# =========================
 
 STOCKS = [
-    "AAPL", "TSLA", "NVDA", "AMD", "MSFT",
-    "META", "AMZN", "GOOGL", "NFLX",
-    "SPY", "QQQ", "IWM","RBLX","AVGO"
+    "AAPL","TSLA","NVDA","AMD","MSFT","AMZN","META","GOOGL","NFLX","PLTR"
 ]
 
-# =========================
-# 🧠 SCORING ENGINE
-# =========================
-def score_stock(price, prev, vol, volatility):
-    trend_score = 1 if price > prev else -1
-
-    # normalize volume impact
-    vol_score = min(vol, 3.0)  # cap extreme spikes
-
-    # volatility sweet spot (not too low, not crazy high)
-    vol_adjust = 1.0
-    if 0.01 < volatility < 0.05:
-        vol_adjust = 1.3
-    elif volatility >= 0.08:
-        vol_adjust = 0.7
-
-    score = (trend_score * 1.5) + (vol_score * 0.7) * vol_adjust
-
-    return score
-
-
-# =========================
-# 🚀 SCANNER V3
-# =========================
-def market(top_n=8):
+def market():
     try:
         data = yf.download(
             tickers=" ".join(STOCKS),
@@ -42,64 +19,43 @@ def market(top_n=8):
             threads=False
         )
 
-        scored = []
+        out = {}
 
         for s in STOCKS:
             try:
                 if s not in data:
                     continue
 
-                df = data[s]
+                df = data[s].dropna()
 
-                if df is None or df.empty:
+                if df.empty or len(df) < 10:
                     continue
 
-                if len(df) < 20:
-                    continue
-
-                close = df["Close"].dropna()
-                volume = df["Volume"].dropna()
-
-                if len(close) < 10:
-                    continue
-
-                price = float(close.iloc[-1])
-                prev = float(close.iloc[-5])
+                price = float(df["Close"].iloc[-1])
+                prev = float(df["Close"].iloc[-5])
 
                 # volume strength
+                vol_series = df["Volume"].dropna()
                 vol = 1.0
-                if len(volume) > 5 and volume.mean() > 0:
-                    vol = float(volume.iloc[-1]) / float(volume.mean())
+                if len(vol_series) > 5:
+                    avg_vol = vol_series.mean()
+                    vol = float(vol_series.iloc[-1]) / avg_vol if avg_vol != 0 else 1.0
 
-                # volatility
-                returns = close.pct_change().dropna()
-                volatility = float(returns.std()) if len(returns) > 2 else 0.0
+                # momentum strength (extra signal)
+                momentum = (price - prev) / prev
 
-                score = score_stock(price, prev, vol, volatility)
-
-                scored.append((s, score, {
+                out[s] = {
                     "price": price,
-                    "trend": "UP" if price > prev else "DOWN",
+                    "trend": "UP" if momentum > 0 else "DOWN",
                     "vol": float(vol),
-                    "volatility": float(volatility),
-                    "score": float(score)
-                }))
+                    "momentum": float(momentum)
+                }
 
-            except Exception:
+            except:
                 continue
-
-        # =========================
-        # 🎯 SELECT TOP STOCKS
-        # =========================
-        scored.sort(key=lambda x: x[1], reverse=True)
-        top = scored[:top_n]
-
-        out = {}
-        for s, _, data in top:
-            out[s] = data
 
         return out
 
     except Exception as e:
-        print("SCANNER ERROR:", e)
+        print("MARKET ERROR:", e)
         return {}

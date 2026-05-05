@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 import threading
 import time
 import random
+from engine import HeadTrader
 
 from engine import (
     Portfolio,
@@ -29,6 +30,7 @@ learn = LearningSystem()
 risk = Risk()
 trade_manager = TradeManager()
 evolver = EvolutionEngine(learn)
+head_trader = HeadTrader()
 
 agents = [
     ("MomentumAI", MomentumAI()),
@@ -114,7 +116,17 @@ def trading_loop():
                 weights.append(learn.weight(name))
 
             action, conf = decide(votes, weights)
+            # 🟡 RISK ENGINE FIRST
             allowed = risk.approve(portfolio, action, conf)
+            # 🧠 HEAD TRADER FINAL AUTHORITY (STEP 3)
+            if allowed:
+                allowed = head_trader.approve_trade(
+                    symbol,
+                    action,
+                    conf,
+                    data,
+                    portfolio
+    )
 
             price = data["price"]
             pnl = 0
