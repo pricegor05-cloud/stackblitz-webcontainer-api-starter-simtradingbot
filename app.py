@@ -205,4 +205,124 @@ def state():
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return open("frontend.html").read()
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Fund Terminal v5</title>
+    <style>
+        body {
+            margin:0;
+            background:#0b0f14;
+            color:#00ffcc;
+            font-family: monospace;
+        }
+
+        .grid {
+            display:grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap:10px;
+            padding:10px;
+        }
+
+        .box {
+            background:#111827;
+            padding:12px;
+            border-radius:10px;
+            box-shadow:0 0 10px rgba(0,255,200,0.1);
+        }
+
+        .big {
+            font-size:24px;
+            font-weight:bold;
+        }
+
+        .warn { color:#ff4d4d; }
+        .good { color:#00ff88; }
+
+        pre {
+            white-space: pre-wrap;
+        }
+
+        .header {
+            padding:15px;
+            font-size:22px;
+            text-align:center;
+            border-bottom:1px solid #1f2937;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="header">
+    🧠 AI HEDGE FUND TERMINAL (LIVE STREAM MODE)
+</div>
+
+<div class="grid">
+
+    <div class="box">
+        <div class="big">Equity</div>
+        <div id="equity">...</div>
+    </div>
+
+    <div class="box">
+        <div class="big">Cash</div>
+        <div id="cash">...</div>
+    </div>
+
+    <div class="box">
+        <div class="big">Chop Zone</div>
+        <div id="chop">...</div>
+    </div>
+
+    <div class="box">
+        <div class="big">Active Agents</div>
+        <pre id="agents"></pre>
+    </div>
+
+    <div class="box">
+        <div class="big">Agent Scores</div>
+        <pre id="scores"></pre>
+    </div>
+
+    <div class="box">
+        <div class="big">Live Trades</div>
+        <pre id="trades"></pre>
+    </div>
+
+</div>
+
+<script>
+
+async function load(){
+    const r = await fetch("/state");
+    const d = await r.json();
+
+    document.getElementById("equity").innerHTML =
+        "<span class='good'>$" + d.equity + "</span>";
+
+    document.getElementById("cash").innerHTML =
+        "$" + d.cash;
+
+    document.getElementById("chop").innerHTML =
+        d.chop_zone ? "<span class='warn'>YES</span>" : "NO";
+
+    document.getElementById("agents").innerText =
+        JSON.stringify(d.active_agents, null, 2);
+
+    document.getElementById("scores").innerText =
+        JSON.stringify(d.agent_scores, null, 2);
+
+    document.getElementById("trades").innerText =
+        JSON.stringify(d.trades || [], null, 2);
+}
+
+setInterval(load, 1000);
+load();
+
+</script>
+
+</body>
+</html>
+"""
