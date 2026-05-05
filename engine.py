@@ -1,8 +1,14 @@
 from collections import defaultdict, deque
 import math
 import random
+from collections import defaultdict
 
 class Portfolio:
+    def compound(self):
+    gain = self.equity - 5000
+    if gain > 0:
+        self.cash += gain * 0.05  # reinvest profit slowly
+    
     def __init__(self, cash=5000):
         self.cash = cash
         self.positions = {}
@@ -103,6 +109,26 @@ class TradeManager:
 
         return change <= -self.stop_loss or change >= self.take_profit
 
+
+class Analytics:
+    def __init__(self):
+        self.pnl_history = defaultdict(list)
+
+    def update(self, agent, pnl):
+        self.pnl_history[agent].append(pnl)
+
+    def sharpe(self, agent):
+        data = self.pnl_history[agent]
+        if len(data) < 2:
+            return 0.0
+
+        avg = sum(data) / len(data)
+        var = sum((x - avg) ** 2 for x in data) / len(data)
+
+        if var == 0:
+            return 0
+
+        return avg / math.sqrt(var)
 
 class EvolutionEngine:
     def __init__(self, learn):

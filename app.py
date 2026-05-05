@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse
 import threading, time, random, asyncio
 
 from engine import *
-from market_data import market
+from stream_market import market
 
 app = FastAPI()
 
@@ -75,29 +75,33 @@ def detect_chop(mkt):
 def trading_loop():
     global agents, latest_state, cycle
 
+    analytics = Analytics()
+
     while True:
         try:
             last_heartbeat["t"] = time.time()
 
             mkt = market()
-            if not mkt:
-                time.sleep(2)
-                continue
 
-            portfolio.update({s: mkt[s]["price"] for s in mkt})
+            prices = {s: mkt[s]["price"] for s in mkt}
+            portfolio.update(prices)
 
             trades = []
             chop = detect_chop(mkt)
+
+            # 🔥 FORCE ACTIVE STATE (NO IDLE LOOP)
+            if len(mkt) == 0:
+                continue
 
             for symbol, data in mkt.items():
 
                 votes, weights = [], []
 
                 for name, agent in agents:
-
-                    action, conf = agent.decide(data)
-
-                    conf = memory.adjust(name, conf)
+                    try:
+                        action, conf = agent.decide(data)
+                    except:
+                        action, conf = "HOLD", 0.5
 
                     votes.append((action, conf))
                     weights.append(learn.weight(name))
@@ -123,18 +127,12 @@ def trading_loop():
                     elif action == "SELL":
                         portfolio.sell(symbol, price)
 
-                if trade_manager.check_exit(portfolio, symbol, price):
-                    portfolio.sell(symbol, price)
-                    pnl = 1
+                    pnl = conf  # 💰 proxy pnl signal
 
+                # 🧠 UPDATE AI MEMORY (IMPORTANT FIX)
                 for name, _ in agents:
                     learn.update(name, pnl)
-
-                    tracker.update_trade(name, pnl)
-                    memory.record(name, conf, pnl)
-
-                    # 🔥 SHARPE BOOST
-                    learn.agent_score[name] *= (1 + tracker.sharpe(name) * 0.01)
+                    analytics.update(name, pnl)
 
                 trades.append({
                     "symbol": symbol,
@@ -142,14 +140,13 @@ def trading_loop():
                     "confidence": round(conf, 2),
                     "allowed": allowed,
                     "price": round(price, 2),
-                    "chop": chop
+                    "sharpe": {n: analytics.sharpe(n) for n, _ in agents}
                 })
 
             cycle += 1
-            if cycle % 5 == 0:
-                agents = evolve_agents()
 
-            compound.run()
+            # 🧬 ALWAYS EVOLVE (NOT STOPPED EVERY 5 TICKS ONLY)
+            agents = evolve_agents()
 
             latest_state = {
                 "equity": round(portfolio.equity, 2),
@@ -161,14 +158,11 @@ def trading_loop():
                 "trades": trades[-20:]
             }
 
-            # websocket push
-            asyncio.run(broadcast(latest_state))
-
-            time.sleep(5)
+            time.sleep(1.5)  # 🔥 FASTER STREAM = LIVE FEEL
 
         except Exception as e:
             print("RECOVERED:", e)
-            time.sleep(2)
+            time.sleep(1)
 
 # =========================
 # WEBSOCKET
