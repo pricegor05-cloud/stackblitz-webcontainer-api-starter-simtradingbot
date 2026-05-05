@@ -139,3 +139,63 @@ def detect_chop(mkt):
     up=sum(1 for s in mkt if mkt[s]["trend"]=="UP")
     down=sum(1 for s in mkt if mkt[s]["trend"]=="DOWN")
     return avg<0.95 and abs(up-down)<len(mkt)*0.25
+
+    from collections import defaultdict, deque
+import math
+
+# =========================
+# 📊 LEVEL 3 PERFORMANCE SYSTEM
+# =========================
+class PerformanceTracker:
+    def __init__(self):
+        self.pnl = defaultdict(float)
+        self.trades = defaultdict(int)
+        self.history = defaultdict(lambda: deque(maxlen=100))
+
+    def update_trade(self, agent, profit):
+        self.pnl[agent] += profit
+        self.trades[agent] += 1
+        self.history[agent].append(profit)
+
+    def sharpe(self, agent):
+        h = list(self.history[agent])
+        if len(h) < 2:
+            return 0.0
+
+        avg = sum(h) / len(h)
+        std = (sum((x - avg) ** 2 for x in h) / len(h)) ** 0.5
+
+        return avg / std if std != 0 else avg * 10
+
+
+# =========================
+# 🧠 CONFIDENCE MEMORY
+# =========================
+class TradeMemory:
+    def __init__(self):
+        self.memory = defaultdict(lambda: deque(maxlen=50))
+
+    def record(self, agent, conf, result):
+        self.memory[agent].append((conf, result))
+
+    def adjust(self, agent, conf):
+        m = self.memory[agent]
+        if not m:
+            return conf
+
+        success = sum(1 for c, r in m if r > 0) / len(m)
+        return conf * (0.5 + success)
+
+
+# =========================
+# 💰 AUTO COMPOUND ENGINE
+# =========================
+class CompoundEngine:
+    def __init__(self, portfolio):
+        self.portfolio = portfolio
+
+    def run(self):
+        growth = (self.portfolio.equity - self.portfolio.cash) / max(self.portfolio.cash, 1)
+
+        if growth > 0.02:
+            self.portfolio.cash += self.portfolio.equity * 0.01

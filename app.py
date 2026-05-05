@@ -1,6 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
-import threading, time, random
+import threading, time, random, asyncio
 
 from engine import *
 from market_data import market
@@ -17,6 +17,10 @@ trade_manager = TradeManager()
 evolver = EvolutionEngine(learn)
 head_trader = HeadTrader()
 
+tracker = PerformanceTracker()
+memory = TradeMemory()
+compound = CompoundEngine(portfolio)
+
 agents = [
     ("MomentumAI", MomentumAI()),
     ("MeanReversionAI", MeanReversionAI()),
@@ -26,10 +30,11 @@ agents = [
 
 latest_state = {}
 cycle = 0
+clients = []
 last_heartbeat = {"t": time.time()}
 
 # =========================
-# RESET AGENTS
+# RESET
 # =========================
 def reset_agents():
     return [
@@ -40,16 +45,13 @@ def reset_agents():
     ]
 
 # =========================
-# WATCHDOG (ANTI FREEZE)
+# WATCHDOG
 # =========================
 def watchdog():
-    global agents, latest_state
-
+    global agents
     while True:
         time.sleep(10)
-
         if time.time() - last_heartbeat["t"] > 25:
-            print("⚠️ SYSTEM RESET (WATCHDOG TRIGGERED)")
             agents = reset_agents()
             last_heartbeat["t"] = time.time()
 
@@ -61,41 +63,14 @@ def detect_chop(mkt):
     if not vols:
         return False
 
-    avg_vol = sum(vols) / len(vols)
+    avg = sum(vols) / len(vols)
     up = sum(1 for s in mkt if mkt[s]["trend"] == "UP")
     down = sum(1 for s in mkt if mkt[s]["trend"] == "DOWN")
 
-    return avg_vol < 0.9 and abs(up - down) < len(mkt) * 0.2
+    return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
 # =========================
-# EVOLUTION
-# =========================
-def evolve_agents():
-    global agents
-
-    new_agents = []
-    updated_scores = learn.agent_score.copy()
-
-    for name, agent in agents:
-        score = learn.agent_score.get(name, 1.0)
-
-        if score > 1.2:
-            new_agents.append((name, agent))
-
-        elif score < 0.8:
-            continue
-
-        else:
-            mutated = evolver.mutate(agent)
-            new_name = f"{name}_v2_{random.randint(100,999)}"
-            new_agents.append((new_name, mutated))
-            updated_scores[new_name] = score * random.uniform(0.95, 1.05)
-
-    learn.agent_score.update(updated_scores)
-    return new_agents
-
-# =========================
-# TRADING LOOP (FIXED + ALWAYS ACTIVE)
+# TRADING LOOP (LEVEL 3 CORE)
 # =========================
 def trading_loop():
     global agents, latest_state, cycle
@@ -105,39 +80,24 @@ def trading_loop():
             last_heartbeat["t"] = time.time()
 
             mkt = market()
-
-            if not mkt or len(mkt) == 0:
+            if not mkt:
                 time.sleep(2)
                 continue
 
-            prices = {s: mkt[s]["price"] for s in mkt}
-            portfolio.update(prices)
+            portfolio.update({s: mkt[s]["price"] for s in mkt})
 
             trades = []
             chop = detect_chop(mkt)
-
-            # 🔥 FORCE ACTIVITY (PREVENT EQUITY FREEZE)
-            if len(mkt) > 0:
-                sym = random.choice(list(mkt.keys()))
-                if random.random() < 0.12:
-                    portfolio.buy(sym, mkt[sym]["price"], 0.55)
 
             for symbol, data in mkt.items():
 
                 votes, weights = [], []
 
                 for name, agent in agents:
-                    try:
-                        action, conf = agent.decide(data)
 
-                        # FIX 3 — sanitize agents
-                        if action not in ["BUY", "SELL", "HOLD"]:
-                            action, conf = "HOLD", 0.5
+                    action, conf = agent.decide(data)
 
-                        conf = max(0.3, min(conf, 0.95))
-
-                    except:
-                        action, conf = "HOLD", 0.5
+                    conf = memory.adjust(name, conf)
 
                     votes.append((action, conf))
                     weights.append(learn.weight(name))
@@ -148,12 +108,7 @@ def trading_loop():
 
                 if allowed:
                     allowed = head_trader.approve_trade(
-                        symbol,
-                        action,
-                        conf,
-                        data,
-                        portfolio,
-                        chop
+                        symbol, action, conf, data, portfolio, chop
                     )
 
                 if chop:
@@ -175,6 +130,12 @@ def trading_loop():
                 for name, _ in agents:
                     learn.update(name, pnl)
 
+                    tracker.update_trade(name, pnl)
+                    memory.record(name, conf, pnl)
+
+                    # 🔥 SHARPE BOOST
+                    learn.agent_score[name] *= (1 + tracker.sharpe(name) * 0.01)
+
                 trades.append({
                     "symbol": symbol,
                     "action": action,
@@ -188,6 +149,8 @@ def trading_loop():
             if cycle % 5 == 0:
                 agents = evolve_agents()
 
+            compound.run()
+
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
@@ -198,20 +161,49 @@ def trading_loop():
                 "trades": trades[-20:]
             }
 
+            # websocket push
+            asyncio.run(broadcast(latest_state))
+
             time.sleep(5)
 
         except Exception as e:
-            print("🔥 LOOP RECOVERED:", e)
+            print("RECOVERED:", e)
             time.sleep(2)
 
 # =========================
-# START SYSTEM THREADS (FIX 4)
+# WEBSOCKET
+# =========================
+@app.websocket("/ws")
+async def ws(websocket: WebSocket):
+    await websocket.accept()
+    clients.append(websocket)
+
+    try:
+        while True:
+            await websocket.send_json(latest_state)
+            await asyncio.sleep(1)
+    except:
+        clients.remove(websocket)
+
+async def broadcast(data):
+    dead = []
+    for c in clients:
+        try:
+            await c.send_json(data)
+        except:
+            dead.append(c)
+
+    for d in dead:
+        clients.remove(d)
+
+# =========================
+# START THREADS
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
 
 # =========================
-# API
+# ROUTES
 # =========================
 @app.get("/state")
 def state():
