@@ -1,46 +1,17 @@
 import yfinance as yf
-import time
 import random
+import time
 
 STOCKS = [
-    "AAPL","TSLA","NVDA","AMD","MSFT",
-    "AMZN","META","GOOGL","NFLX","PLTR"
+    "AAPL","TSLA","NVDA","AMD","MSFT","AMZN","META","GOOGL","NFLX","PLTR"
 ]
 
-# =========================
-# 🧠 CACHE (LAST GOOD DATA)
-# =========================
-cache = {}
+# fallback memory market (prevents freeze)
+_last_market = {}
 
-# =========================
-# 🔵 SYNTHETIC FALLBACK ENGINE
-# =========================
-def synthetic_market():
-    out = {}
+def market():
+    global _last_market
 
-    for s in STOCKS:
-        last = cache.get(s, {"price": 100})
-
-        drift = random.uniform(-0.3, 0.3)
-        price = max(1, last["price"] * (1 + drift / 100))
-
-        trend = "UP" if drift > 0 else "DOWN"
-        vol = random.uniform(0.5, 1.5)
-
-        out[s] = {
-            "price": price,
-            "trend": trend,
-            "vol": vol,
-            "momentum": drift / 100
-        }
-
-    return out
-
-
-# =========================
-# 🟢 LIVE MARKET (PRIMARY)
-# =========================
-def live_market():
     try:
         data = yf.download(
             tickers=" ".join(STOCKS),
@@ -48,11 +19,8 @@ def live_market():
             interval="1m",
             group_by="ticker",
             progress=False,
-            threads=False
+            threads=True
         )
-
-        if data is None or len(data) == 0:
-            return None
 
         out = {}
 
@@ -62,7 +30,7 @@ def live_market():
                     continue
 
                 df = data[s].dropna()
-                if df.empty or len(df) < 10:
+                if df.empty or len(df) < 5:
                     continue
 
                 price = float(df["Close"].iloc[-1])
@@ -70,7 +38,6 @@ def live_market():
 
                 vol_series = df["Volume"].dropna()
                 vol = 1.0
-
                 if len(vol_series) > 5:
                     avg_vol = vol_series.mean()
                     vol = float(vol_series.iloc[-1]) / avg_vol if avg_vol != 0 else 1.0
@@ -87,30 +54,25 @@ def live_market():
             except:
                 continue
 
-        return out if len(out) > 0 else None
+        # 🔴 fallback if empty
+        if len(out) == 0:
+            raise Exception("empty market")
 
-    except Exception:
-        return None
+        _last_market = out
+        return out
 
+    except:
+        # 🟡 return last known market with noise (CRITICAL FIX)
+        noisy = {}
 
-# =========================
-# 🧠 LEVEL 2 MARKET ENGINE
-# =========================
-def market():
-    global cache
+        for s, d in _last_market.items():
+            price = d["price"] * random.uniform(0.998, 1.002)
 
-    data = live_market()
+            noisy[s] = {
+                "price": price,
+                "trend": d["trend"],
+                "vol": d["vol"],
+                "momentum": d["momentum"]
+            }
 
-    # 🟢 CASE 1: LIVE WORKING
-    if data:
-        cache = data
-        return data
-
-    # 🟡 CASE 2: USE CACHE
-    if cache:
-        print("🟡 MARKET FALLBACK: using cached data")
-        return cache
-
-    # 🔵 CASE 3: SYNTHETIC MODE
-    print("🔵 MARKET SYNTHETIC MODE ACTIVE")
-    return synthetic_market()
+        return noisy

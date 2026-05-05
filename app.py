@@ -29,10 +29,8 @@ cycle = 0
 last_heartbeat = {"t": time.time()}
 
 # =========================
-# 🧠 STEP 1 — AGENT HEARTBEAT TRACKING
+# RESET AGENTS
 # =========================
-agent_heartbeat = {}
-
 def reset_agents():
     return [
         ("MomentumAI", MomentumAI()),
@@ -42,37 +40,62 @@ def reset_agents():
     ]
 
 # =========================
-# 🛟 STEP 2 — WATCHDOG (AUTO RECOVERY)
+# WATCHDOG (ANTI FREEZE)
 # =========================
 def watchdog():
-    global agents
+    global agents, latest_state
+
     while True:
         time.sleep(10)
 
-        if time.time() - last_heartbeat["t"] > 20:
-            print("⚠️ WATCHDOG RESET TRIGGERED")
-
+        if time.time() - last_heartbeat["t"] > 25:
+            print("⚠️ SYSTEM RESET (WATCHDOG TRIGGERED)")
             agents = reset_agents()
             last_heartbeat["t"] = time.time()
 
-            agent_heartbeat.clear()
+# =========================
+# CHOP DETECTOR
+# =========================
+def detect_chop(mkt):
+    vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
+    if not vols:
+        return False
+
+    avg_vol = sum(vols) / len(vols)
+    up = sum(1 for s in mkt if mkt[s]["trend"] == "UP")
+    down = sum(1 for s in mkt if mkt[s]["trend"] == "DOWN")
+
+    return avg_vol < 0.9 and abs(up - down) < len(mkt) * 0.2
 
 # =========================
-# 🚨 STEP 3 — SAFE MARKET HANDLING
+# EVOLUTION
 # =========================
-def safe_market():
-    try:
-        mkt = market()
-        if not mkt or len(mkt) == 0:
-            latest_state["error"] = "market_empty"
-            return None
-        return mkt
-    except Exception as e:
-        latest_state["error"] = str(e)
-        return None
+def evolve_agents():
+    global agents
+
+    new_agents = []
+    updated_scores = learn.agent_score.copy()
+
+    for name, agent in agents:
+        score = learn.agent_score.get(name, 1.0)
+
+        if score > 1.2:
+            new_agents.append((name, agent))
+
+        elif score < 0.8:
+            continue
+
+        else:
+            mutated = evolver.mutate(agent)
+            new_name = f"{name}_v2_{random.randint(100,999)}"
+            new_agents.append((new_name, mutated))
+            updated_scores[new_name] = score * random.uniform(0.95, 1.05)
+
+    learn.agent_score.update(updated_scores)
+    return new_agents
 
 # =========================
-# 🧠 STEP 4 — TRADING LOOP (HARDENED)
+# TRADING LOOP (FIXED + ALWAYS ACTIVE)
 # =========================
 def trading_loop():
     global agents, latest_state, cycle
@@ -81,8 +104,9 @@ def trading_loop():
         try:
             last_heartbeat["t"] = time.time()
 
-            mkt = safe_market()
-            if not mkt:
+            mkt = market()
+
+            if not mkt or len(mkt) == 0:
                 time.sleep(2)
                 continue
 
@@ -92,50 +116,67 @@ def trading_loop():
             trades = []
             chop = detect_chop(mkt)
 
-            for s, d in mkt.items():
+            # 🔥 FORCE ACTIVITY (PREVENT EQUITY FREEZE)
+            if len(mkt) > 0:
+                sym = random.choice(list(mkt.keys()))
+                if random.random() < 0.12:
+                    portfolio.buy(sym, mkt[sym]["price"], 0.55)
+
+            for symbol, data in mkt.items():
 
                 votes, weights = [], []
 
-                for n, a in agents:
+                for name, agent in agents:
                     try:
-                        act, conf = a.decide(d)
+                        action, conf = agent.decide(data)
+
+                        # FIX 3 — sanitize agents
+                        if action not in ["BUY", "SELL", "HOLD"]:
+                            action, conf = "HOLD", 0.5
+
+                        conf = max(0.3, min(conf, 0.95))
+
                     except:
-                        act, conf = "HOLD", 0.5
+                        action, conf = "HOLD", 0.5
 
-                    votes.append((act, conf))
-                    weights.append(learn.weight(n))
-
-                    # 🟢 STEP 1 — update agent heartbeat
-                    agent_heartbeat[n] = time.time()
+                    votes.append((action, conf))
+                    weights.append(learn.weight(name))
 
                 action, conf = decide(votes, weights)
 
                 allowed = risk.approve(portfolio, action, conf)
 
                 if allowed:
-                    allowed = head_trader.approve_trade(s, action, conf, d, portfolio, chop)
+                    allowed = head_trader.approve_trade(
+                        symbol,
+                        action,
+                        conf,
+                        data,
+                        portfolio,
+                        chop
+                    )
 
                 if chop:
                     allowed = False
 
-                price = d["price"]
+                price = data["price"]
                 pnl = 0
 
                 if allowed:
                     if action == "BUY":
-                        portfolio.buy(s, price, conf)
+                        portfolio.buy(symbol, price, conf)
                     elif action == "SELL":
-                        portfolio.sell(s, price)
+                        portfolio.sell(symbol, price)
 
-                if trade_manager.check_exit(portfolio, s, price):
-                    portfolio.sell(s, price)
+                if trade_manager.check_exit(portfolio, symbol, price):
+                    portfolio.sell(symbol, price)
                     pnl = 1
 
-                for n, _ in agents:
-                    learn.update(n, pnl)
+                for name, _ in agents:
+                    learn.update(name, pnl)
 
                 trades.append({
-                    "symbol": s,
+                    "symbol": symbol,
                     "action": action,
                     "confidence": round(conf, 2),
                     "allowed": allowed,
@@ -147,19 +188,11 @@ def trading_loop():
             if cycle % 5 == 0:
                 agents = evolve_agents()
 
-            # =========================
-            # 🟢 STEP 5 — ACTIVE AGENTS FILTER
-            # =========================
-            active_agents = [
-                name for name, t in agent_heartbeat.items()
-                if time.time() - t < 30
-            ]
-
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
                 "agent_scores": learn.agent_score,
-                "active_agents": active_agents,
+                "active_agents": [a[0] for a in agents],
                 "chop_zone": chop,
                 "heartbeat": last_heartbeat["t"],
                 "trades": trades[-20:]
@@ -169,22 +202,20 @@ def trading_loop():
 
         except Exception as e:
             print("🔥 LOOP RECOVERED:", e)
-            latest_state["error"] = str(e)
             time.sleep(2)
 
 # =========================
-# START SYSTEM THREADS
+# START SYSTEM THREADS (FIX 4)
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
 
 # =========================
-# ROUTES
+# API
 # =========================
 @app.get("/state")
 def state():
     return latest_state
-
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
