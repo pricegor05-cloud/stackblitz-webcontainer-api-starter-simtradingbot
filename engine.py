@@ -1,8 +1,10 @@
 from collections import defaultdict, deque
 import math
 import random
-from collections import defaultdict
 
+# =========================
+# 💰 PORTFOLIO
+# =========================
 class Portfolio:
     def __init__(self, cash=5000):
         self.cash = cash
@@ -29,7 +31,10 @@ class Portfolio:
         qty = size / price
         self.cash -= size
 
-        self.positions[symbol] = {"qty": qty, "entry": price}
+        self.positions[symbol] = {
+            "qty": qty,
+            "entry": price
+        }
 
     def sell(self, symbol, price):
         if symbol in self.positions:
@@ -37,7 +42,15 @@ class Portfolio:
             self.cash += pos["qty"] * price
             del self.positions[symbol]
 
+    def compound(self):
+        gain = self.equity - 5000
+        if gain > 0:
+            self.cash += gain * 0.05
 
+
+# =========================
+# 🤖 AGENTS
+# =========================
 class MomentumAI:
     def decide(self, d):
         return ("BUY", 0.8) if d.get("trend") == "UP" else ("HOLD", 0.5)
@@ -52,9 +65,16 @@ class BreakoutAI:
 
 class SentimentAI:
     def decide(self, d):
-        return random.choice([("BUY",0.6),("SELL",0.6),("HOLD",0.5)])
+        return random.choice([
+            ("BUY", 0.6),
+            ("SELL", 0.6),
+            ("HOLD", 0.5)
+        ])
 
 
+# =========================
+# 🧠 LEARNING SYSTEM
+# =========================
 class LearningSystem:
     def __init__(self):
         self.agent_score = {
@@ -68,43 +88,14 @@ class LearningSystem:
         return self.agent_score.get(name, 1.0)
 
     def update(self, name, pnl):
-        self.agent_score[name] = self.agent_score.get(name, 1.0)
-        self.agent_score[name] *= (1.02 if pnl > 0 else 0.98)
-        self.agent_score[name] = max(0.3, min(3.0, self.agent_score[name]))
+        score = self.agent_score.get(name, 1.0)
+        score *= (1.02 if pnl > 0 else 0.98)
+        self.agent_score[name] = max(0.3, min(3.0, score))
 
 
-def decide(votes, weights):
-    score = {"BUY":0,"SELL":0,"HOLD":0}
-
-    for (a,c),w in zip(votes, weights):
-        score[a] += c*w
-
-    best = max(score, key=score.get)
-    total = sum(score.values()) + 1e-9
-
-    return best, score[best]/total
-
-
-class Risk:
-    def approve(self, portfolio, action, conf):
-        return portfolio.equity > 4000 and conf > 0.55 and action != "HOLD"
-
-
-class TradeManager:
-    def __init__(self):
-        self.stop_loss = 0.03
-        self.take_profit = 0.06
-
-    def check_exit(self, portfolio, symbol, price):
-        if symbol not in portfolio.positions:
-            return False
-
-        pos = portfolio.positions[symbol]
-        change = (price - pos["entry"]) / pos["entry"]
-
-        return change <= -self.stop_loss or change >= self.take_profit
-
-
+# =========================
+# 📊 ANALYTICS (SHARPE)
+# =========================
 class Analytics:
     def __init__(self):
         self.pnl_history = defaultdict(list)
@@ -125,6 +116,54 @@ class Analytics:
 
         return avg / math.sqrt(var)
 
+
+# =========================
+# 🧠 DECISION ENGINE
+# =========================
+def decide(votes, weights):
+    score = {"BUY": 0, "SELL": 0, "HOLD": 0}
+
+    for (a, c), w in zip(votes, weights):
+        score[a] += c * w
+
+    best = max(score, key=score.get)
+    total = sum(score.values()) + 1e-9
+
+    return best, score[best] / total
+
+
+# =========================
+# ⚠️ RISK
+# =========================
+class Risk:
+    def approve(self, portfolio, action, conf):
+        return portfolio.equity > 4000 and conf > 0.55 and action != "HOLD"
+
+
+# =========================
+# 📉 TRADE MANAGER
+# =========================
+class TradeManager:
+    def __init__(self):
+        self.stop_loss = 0.03
+        self.take_profit = 0.06
+
+    def check_exit(self, portfolio, symbol, price):
+        if symbol not in portfolio.positions:
+            return False
+
+        pos = portfolio.positions[symbol]
+        change = (price - pos["entry"]) / pos["entry"]
+
+        return (
+            change <= -self.stop_loss or
+            change >= self.take_profit
+        )
+
+
+# =========================
+# 🧬 EVOLUTION
+# =========================
 class EvolutionEngine:
     def __init__(self, learn):
         self.learn = learn
@@ -133,41 +172,51 @@ class EvolutionEngine:
         class M:
             def decide(self, d):
                 try:
-                    a,c = agent.decide(d)
+                    a, c = agent.decide(d)
                 except:
-                    return "HOLD",0.5
+                    return "HOLD", 0.5
 
-                if random.random()<0.05:
-                    return "BUY",0.9
-                if random.random()<0.05:
-                    return "SELL",0.9
-                return a,c
+                if random.random() < 0.05:
+                    return "BUY", 0.9
+                if random.random() < 0.05:
+                    return "SELL", 0.9
+
+                return a, c
         return M()
 
 
+# =========================
+# 🧠 HEAD TRADER
+# =========================
 class HeadTrader:
-    def approve_trade(self, s,a,c,d,p,chop=False):
+    def approve_trade(self, s, a, c, d, portfolio, chop=False):
         if chop or c < 0.6:
             return False
-        if a=="BUY" and d.get("trend")=="DOWN":
+
+        if a == "BUY" and d.get("trend") == "DOWN":
             return False
+
         return True
 
 
+# =========================
+# 📊 CHOP DETECTION
+# =========================
 def detect_chop(mkt):
-    vols=[mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
+    vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
+
     if not vols:
         return False
-    avg=sum(vols)/len(vols)
-    up=sum(1 for s in mkt if mkt[s]["trend"]=="UP")
-    down=sum(1 for s in mkt if mkt[s]["trend"]=="DOWN")
-    return avg<0.95 and abs(up-down)<len(mkt)*0.25
 
-    from collections import defaultdict, deque
-import math
+    avg = sum(vols) / len(vols)
+    up = sum(1 for s in mkt if mkt[s]["trend"] == "UP")
+    down = sum(1 for s in mkt if mkt[s]["trend"] == "DOWN")
+
+    return avg < 0.95 and abs(up - down) < len(mkt) * 0.25
+
 
 # =========================
-# 📊 LEVEL 3 PERFORMANCE SYSTEM
+# 📊 PERFORMANCE TRACKER
 # =========================
 class PerformanceTracker:
     def __init__(self):
@@ -192,7 +241,7 @@ class PerformanceTracker:
 
 
 # =========================
-# 🧠 CONFIDENCE MEMORY
+# 🧠 TRADE MEMORY
 # =========================
 class TradeMemory:
     def __init__(self):
@@ -211,7 +260,7 @@ class TradeMemory:
 
 
 # =========================
-# 💰 AUTO COMPOUND ENGINE
+# 💰 COMPOUND ENGINE
 # =========================
 class CompoundEngine:
     def __init__(self, portfolio):
