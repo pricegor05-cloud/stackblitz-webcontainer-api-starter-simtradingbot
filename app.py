@@ -1,14 +1,33 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import random
 import time
+import random
+
+# =========================
+# OPTIONAL: X API (SAFE FALLBACK)
+# =========================
+try:
+    import tweepy
+    X_AVAILABLE = True
+except:
+    X_AVAILABLE = False
 
 app = FastAPI()
 
 WATCHLIST = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "AMD"]
 
 # =========================
-# 1. MOCK PRICE HISTORY ENGINE
+# X CLIENT (OPTIONAL)
+# =========================
+X_BEARER_TOKEN = None  # put your key here if using
+
+if X_AVAILABLE and X_BEARER_TOKEN:
+    x_client = tweepy.Client(bearer_token=X_BEARER_TOKEN, wait_on_rate_limit=True)
+else:
+    x_client = None
+
+# =========================
+# PRICE HISTORY ENGINE (SIM)
 # =========================
 def get_price_history(symbol):
     return {
@@ -19,91 +38,123 @@ def get_price_history(symbol):
     }
 
 # =========================
-# 2. TWITTER/X SENTIMENT (API READY STUB)
+# TWITTER SENTIMENT (REAL IF AVAILABLE, ELSE SIM)
 # =========================
 def twitter_sentiment(symbol):
-    # Replace later with X API (tweepy)
-    return {
-        "tweet_sentiment": random.uniform(-1, 1),
-        "tweet_volume": random.uniform(0, 2),
-        "viral_score": random.uniform(-1, 1)
-    }
+
+    if not x_client:
+        return {
+            "tweet_sentiment": random.uniform(-1, 1),
+            "tweet_volume": random.randint(0, 20),
+            "viral_score": random.uniform(0, 1)
+        }
+
+    try:
+        query = f"{symbol} stock -is:retweet lang:en"
+
+        tweets = x_client.search_recent_tweets(
+            query=query,
+            max_results=10,
+            tweet_fields=["text"]
+        )
+
+        if not tweets.data:
+            return {"tweet_sentiment": 0, "tweet_volume": 0, "viral_score": 0}
+
+        bullish = ["buy", "bull", "moon", "long", "breakout", "up"]
+        bearish = ["sell", "bear", "crash", "dump", "short", "down"]
+
+        score = 0
+        texts = [t.text.lower() for t in tweets.data]
+
+        for t in texts:
+            for w in bullish:
+                if w in t:
+                    score += 1
+            for w in bearish:
+                if w in t:
+                    score -= 1
+
+        volume = len(texts)
+
+        return {
+            "tweet_sentiment": max(-1, min(1, score / 10)),
+            "tweet_volume": volume,
+            "viral_score": min(1, volume / 10)
+        }
+
+    except:
+        return {"tweet_sentiment": 0, "tweet_volume": 0, "viral_score": 0}
 
 # =========================
-# 3. FINBERT-STYLE NEWS NLP (SIMULATED STRUCTURE)
+# NEWS SENTIMENT (FINBERT PLACEHOLDER)
 # =========================
-def finbert_news_sentiment(symbol):
-    # Replace later with transformers pipeline
+def news_sentiment(symbol):
     return {
         "news_sentiment": random.uniform(-1, 1),
         "news_confidence": random.uniform(0.5, 1.0)
     }
 
 # =========================
-# 4. FEATURE ENGINE (ML INPUT VECTOR)
+# FEATURE BUILDER
 # =========================
 def build_features(symbol):
     price = get_price_history(symbol)
     twitter = twitter_sentiment(symbol)
-    news = finbert_news_sentiment(symbol)
+    news = news_sentiment(symbol)
 
-    return {
-        **price,
-        **twitter,
-        **news
-    }
+    return {**price, **twitter, **news}
 
 # =========================
-# 5. ML MODEL (SIMULATED WEIGHTED REGRESSION)
+# ML MODEL (FIXED + CLEAN)
 # =========================
-def ml_model(features):
-    score =
-        (features["returns_5d"] * 120) +
-        (features["returns_20d"] * 80) +
-        (features["tweet_sentiment"] * 60) +
-        (features["news_sentiment"] * 70) +
-        (features["viral_score"] * 40) +
-        (features["volume_trend"] * 30) -
-        (features["volatility"] * 25)
+def ml_model(f):
+
+    score = (
+        (f["returns_5d"] * 120) +
+        (f["returns_20d"] * 80) +
+        (f["tweet_sentiment"] * 60) +
+        (f["news_sentiment"] * 70) +
+        (f["viral_score"] * 40) +
+        (f["volume_trend"] * 30) -
+        (f["volatility"] * 25)
+    )
 
     return max(-100, min(100, score))
 
 # =========================
-# 6. SIGNAL CLASSIFIER
+# SIGNAL ENGINE
 # =========================
 def signal(score):
     if score > 35:
-        return "BUY (Bullish Bias)"
+        return "BUY"
     elif score < -35:
-        return "SELL (Bearish Bias)"
-    else:
-        return "WATCH (Neutral)"
+        return "SELL"
+    return "WATCH"
 
 # =========================
-# 7. SCANNER ENGINE
+# SCANNER
 # =========================
 def scan():
     results = []
 
-    for symbol in WATCHLIST:
-        features = build_features(symbol)
-        score = ml_model(features)
+    for s in WATCHLIST:
+        f = build_features(s)
+        score = ml_model(f)
 
         results.append({
-            "symbol": symbol,
+            "symbol": s,
             "score": round(score, 2),
             "signal": signal(score),
-            "features": {
-                "twitter": round(features["tweet_sentiment"], 2),
-                "news": round(features["news_sentiment"], 2),
-                "returns_5d": round(features["returns_5d"], 3)
-            }
+            "tweet": round(f["tweet_sentiment"], 2),
+            "news": round(f["news_sentiment"], 2),
+            "volatility": round(f["volatility"], 2)
         })
 
     return sorted(results, key=lambda x: x["score"], reverse=True)
 
 # =========================
-# API ENDPOINT
+# API
 # =========================
 @app.get("/scan")
 def scan_api():
@@ -113,7 +164,7 @@ def scan_api():
     }
 
 # =========================
-# UI DASHBOARD
+# UI
 # =========================
 @app.get("/", response_class=HTMLResponse)
 def ui():
@@ -132,30 +183,30 @@ td, th { padding:8px; border-bottom:1px solid #222; }
 
 <body>
 
-<h2>AI SENTIMENT + ML STOCK BIAS ENGINE</h2>
-<button onclick="load()">SCAN MARKET</button>
+<h2>AI STOCK SENTIMENT + ML BIAS ENGINE (CLEAN)</h2>
+<button onclick="load()">SCAN</button>
 
-<table id="table"></table>
+<table id="t"></table>
 
 <script>
 async function load(){
     const r = await fetch("/scan");
     const d = await r.json();
 
-    let rows = "<tr><th>Symbol</th><th>Score</th><th>Signal</th><th>Twitter</th><th>News</th><th>5D Return</th></tr>";
+    let h = "<tr><th>Stock</th><th>Score</th><th>Signal</th><th>Twitter</th><th>News</th><th>Vol</th></tr>";
 
-    d.results.forEach(s=>{
-        rows += `<tr>
-            <td>${s.symbol}</td>
-            <td>${s.score}</td>
-            <td>${s.signal}</td>
-            <td>${s.features.twitter}</td>
-            <td>${s.features.news}</td>
-            <td>${s.features.returns_5d}</td>
+    d.results.forEach(x=>{
+        h += `<tr>
+        <td>${x.symbol}</td>
+        <td>${x.score}</td>
+        <td>${x.signal}</td>
+        <td>${x.tweet}</td>
+        <td>${x.news}</td>
+        <td>${x.volatility}</td>
         </tr>`;
     });
 
-    document.getElementById("table").innerHTML = rows;
+    document.getElementById("t").innerHTML = h;
 }
 
 load();
