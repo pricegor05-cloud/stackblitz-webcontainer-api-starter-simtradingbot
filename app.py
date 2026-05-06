@@ -12,7 +12,7 @@ from stream_market import market
 app = FastAPI()
 
 # =========================
-# CORE SYSTEM
+# CORE SYSTEM (UNCHANGED)
 # =========================
 portfolio = Portfolio(5000)
 learn = LearningSystem()
@@ -25,16 +25,6 @@ tracker = PerformanceTracker()
 memory = TradeMemory()
 compound = CompoundEngine(portfolio)
 
-# =========================
-# 🔥 ENGINE LAYER
-# =========================
-exec_engine = ExecutionEngine()
-risk_engine = RiskEngine(max_daily_loss=150)
-heatmap = HeatMap()
-
-# =========================
-# ANALYTICS
-# =========================
 analytics = Analytics()
 
 agents = [
@@ -45,10 +35,28 @@ agents = [
 ]
 
 # =========================
+# NEW ENGINE LAYER
+# =========================
+exec_engine = ExecutionEngine()
+risk_engine = RiskEngine(max_daily_loss=150)
+heatmap = HeatMap()
+
+# SAFE fallback (prevents crashes)
+if not hasattr(exec_engine, "orders"):
+    exec_engine.orders = []
+
+# =========================
 # TRADE MEMORY
 # =========================
 trade_history = []
 
+cycle = 0
+clients = []
+last_heartbeat = {"t": time.time()}
+
+# =========================
+# SAFE INITIAL STATE
+# =========================
 latest_state = {
     "equity": 5000,
     "cash": 5000,
@@ -57,15 +65,16 @@ latest_state = {
     "chop_zone": False,
     "heartbeat": time.time(),
     "trades": [],
-    "trade_history": []
+    "trade_history": [],
+    "wins": 0,
+    "losses": 0,
+    "risk_score": 0,
+    "executions": [],
+    "heatmap": {}
 }
 
-cycle = 0
-clients = []
-last_heartbeat = {"t": time.time()}
-
 # =========================
-# RESET
+# RESET AGENTS
 # =========================
 def reset_agents():
     return [
@@ -101,7 +110,7 @@ def detect_chop(mkt):
     return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
 # =========================
-# TRADE CLOSE MATCH
+# CLOSE TRADE MATCHING
 # =========================
 def close_trade(symbol, price):
     for t in reversed(trade_history):
@@ -114,7 +123,7 @@ def close_trade(symbol, price):
 # TRADING LOOP
 # =========================
 def trading_loop():
-    global agents, latest_state, cycle, heatmap
+    global agents, latest_state, cycle
 
     while True:
         try:
@@ -125,17 +134,7 @@ def trading_loop():
                 time.sleep(1)
                 continue
 
-            prices = {s: mkt[s]["price"] for s in mkt}
-            portfolio.update(prices)
-
-            # =========================
-            # 🔴 STEP 6 — KILL SWITCH
-            # =========================
-            if not risk_engine.allow_trade(portfolio.equity):
-                for s in list(portfolio.positions.keys()):
-                    if s in prices:
-                        portfolio.sell(s, prices[s])
-                continue
+            portfolio.update({s: mkt[s]["price"] for s in mkt})
 
             trades = []
             chop = detect_chop(mkt)
@@ -169,7 +168,7 @@ def trading_loop():
                 qty = max(1, int(conf * 10))
 
                 # =========================
-                # 🔵 STEP 5 — EXECUTION ENGINE
+                # EXECUTION + TRADE LOGIC
                 # =========================
                 if allowed and action == "BUY":
                     order = exec_engine.execute(symbol, "BUY", price, qty)
@@ -192,7 +191,6 @@ def trading_loop():
 
                     portfolio.sell(symbol, order["price"])
                     heatmap.update(symbol, -qty)
-
                     close_trade(symbol, order["price"])
 
                 pnl = conf
@@ -211,18 +209,14 @@ def trading_loop():
 
             cycle += 1
 
-            # =========================
-            # 🔁 STEP 7 — DAILY RESET
-            # =========================
-            if cycle % 200 == 0:
-                risk_engine.reset_day(portfolio.equity)
-                heatmap = HeatMap()
-
             agents = [(n, evolver.mutate(a)) for n, a in agents]
 
             # =========================
-            # 🟢 STEP 8 — STATE UPDATE
+            # SAFE STATE UPDATE
             # =========================
+            wins = sum(1 for t in trade_history if t.get("pnl", 0) > 0)
+            losses = sum(1 for t in trade_history if t.get("pnl", 0) < 0)
+
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
@@ -231,12 +225,15 @@ def trading_loop():
                 "chop_zone": chop,
                 "heartbeat": last_heartbeat["t"],
                 "trades": trades[-20:],
+
                 "trade_history": trade_history[-100:],
 
-                # NEW DATA
-                "heatmap": heatmap.snapshot(),
-                "risk_score": heatmap.total_risk(),
-                "executions": exec_engine.orders[-20:]
+                # UI SUPPORT
+                "wins": wins,
+                "losses": losses,
+                "risk_score": heatmap.total_risk() if hasattr(heatmap, "total_risk") else 0,
+                "executions": exec_engine.orders[-20:],
+                "heatmap": heatmap.snapshot() if hasattr(heatmap, "snapshot") else {}
             }
 
             time.sleep(1.2)
@@ -246,78 +243,56 @@ def trading_loop():
             time.sleep(1)
 
 # =========================
-# START SYSTEM
+# START THREADS
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
 
 # =========================
-# ROUTES
+# STATE API
 # =========================
 @app.get("/state")
 def state():
     return latest_state
 
+# =========================
+# UI
+# =========================
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
     return """
 <!DOCTYPE html>
 <html>
 <head>
-<title>PRO AI TRADING TERMINAL</title>
-
+<title>AI TRADING TERMINAL</title>
 <style>
-body {
-    margin:0;
-    background:#05070a;
-    color:#00ffcc;
-    font-family: monospace;
-}
-.header { padding:15px; text-align:center; }
-.grid { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; padding:12px; }
+body { margin:0; background:#05070a; color:#00ffcc; font-family:monospace; }
+.header { padding:12px; text-align:center; }
+.grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; padding:12px; }
 .box { background:#0f172a; padding:12px; border-radius:10px; }
-.big { font-size:24px; font-weight:bold; }
+.big { font-size:20px; }
 .green { color:#00ff88; }
 .red { color:#ff4d4d; }
-.tape { height:200px; overflow:auto; background:#0b1220; padding:10px; border-radius:10px; }
-.trade { border-bottom:1px solid #1f2937; padding:5px; font-size:12px; }
+.tape { height:200px; overflow:auto; background:#0b1220; padding:10px; }
 </style>
 </head>
 
 <body>
 
-<div class="header">🧠 PRO AI TRADING TERMINAL</div>
+<div class="header">🧠 AI TRADING TERMINAL</div>
 
 <div class="grid">
 
-<div class="box">
-<div class="big">EQUITY</div>
-<div id="equity"></div>
-</div>
+<div class="box"><div class="big">EQUITY</div><div id="eq"></div></div>
+<div class="box"><div class="big">CASH</div><div id="cash"></div></div>
+<div class="box"><div class="big">WIN/LOSS</div><div id="wl"></div></div>
 
-<div class="box">
-<div class="big">CASH</div>
-<div id="cash"></div>
-</div>
-
-<div class="box">
-<div class="big">CHOP</div>
-<div id="chop"></div>
-</div>
-
-<div class="box">
-<div class="big">AGENTS</div>
-<pre id="agents"></pre>
-</div>
-
-<div class="box">
-<div class="big">SCORES</div>
-<pre id="scores"></pre>
-</div>
+<div class="box"><div class="big">AGENTS</div><pre id="agents"></pre></div>
+<div class="box"><div class="big">RISK</div><div id="risk"></div></div>
 
 <div class="box" style="grid-column: span 3;">
-<div class="big">TRADE HISTORY (REAL PNL)</div>
-<div class="tape" id="history"></div>
+<div class="big">TRADES</div>
+<div class="tape" id="trades"></div>
 </div>
 
 </div>
@@ -328,30 +303,28 @@ async function load(){
     const r = await fetch("/state");
     const d = await r.json();
 
-    document.getElementById("equity").innerHTML =
-        "<span class='green'>$" + d.equity + "</span>";
+    document.getElementById("eq").innerHTML =
+        "<span class='green'>$"+d.equity+"</span>";
 
-    document.getElementById("cash").innerText = "$" + d.cash;
+    document.getElementById("cash").innerText = "$"+d.cash;
 
-    document.getElementById("chop").innerText = d.chop_zone;
+    document.getElementById("wl").innerText =
+        d.wins+"W / "+d.losses+"L";
+
+    document.getElementById("risk").innerText = d.risk_score;
 
     document.getElementById("agents").innerText =
-        JSON.stringify(d.active_agents, null, 2);
-
-    document.getElementById("scores").innerText =
         JSON.stringify(d.agent_scores, null, 2);
 
-    let h = "";
-    (d.trade_history || []).slice(-20).reverse().forEach(t => {
-        h += `<div class="trade">
-            ${t.symbol} | ${t.side} | entry:${t.entry} | exit:${t.exit} | pnl:${t.pnl}
-        </div>`;
+    let t="";
+    (d.trade_history||[]).slice(-20).forEach(x=>{
+        t += x.symbol+" "+x.side+" pnl:"+x.pnl+"\n";
     });
 
-    document.getElementById("history").innerHTML = h;
+    document.getElementById("trades").innerText = t;
 }
 
-setInterval(load, 1000);
+setInterval(load,1000);
 load();
 
 </script>
