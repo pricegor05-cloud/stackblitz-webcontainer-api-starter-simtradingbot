@@ -228,9 +228,154 @@ threading.Thread(target=watchdog, daemon=True).start()
 # =========================
 @app.get("/state")
 def state():
-    return latest_state
+    return {
+        "equity": float(portfolio.equity),
+        "cash": float(portfolio.cash),
+        "agent_scores": learn.agent_score,
+        "active_agents": [a[0] for a in agents],
+        "chop_zone": False,
+        "heartbeat": time.time(),
+        "trades": latest_state.get("trades", [])
+    }
 
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return open("frontend.html").read()
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+<title>PRO AI TRADING TERMINAL</title>
+
+<style>
+body {
+    margin:0;
+    background:#05070a;
+    color:#00ffcc;
+    font-family: monospace;
+}
+
+.header {
+    padding:15px;
+    text-align:center;
+    font-size:20px;
+    border-bottom:1px solid #1f2937;
+}
+
+.grid {
+    display:grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap:12px;
+    padding:12px;
+}
+
+.box {
+    background:#0f172a;
+    padding:12px;
+    border-radius:10px;
+    box-shadow:0 0 10px rgba(0,255,200,0.08);
+}
+
+.big {
+    font-size:26px;
+    font-weight:bold;
+}
+
+.green { color:#00ff88; }
+.red { color:#ff4d4d; }
+
+.tape {
+    height:200px;
+    overflow:auto;
+    background:#0b1220;
+    padding:10px;
+    border-radius:10px;
+}
+
+.trade {
+    border-bottom:1px solid #1f2937;
+    padding:5px 0;
+    font-size:12px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="header">
+🧠 PRO AI HEDGE FUND TERMINAL (LIVE)
+</div>
+
+<div class="grid">
+
+    <div class="box">
+        <div class="big">EQUITY</div>
+        <div id="equity">...</div>
+    </div>
+
+    <div class="box">
+        <div class="big">CASH</div>
+        <div id="cash">...</div>
+    </div>
+
+    <div class="box">
+        <div class="big">CHOP</div>
+        <div id="chop">...</div>
+    </div>
+
+    <div class="box">
+        <div class="big">AGENTS</div>
+        <pre id="agents"></pre>
+    </div>
+
+    <div class="box">
+        <div class="big">SCORES</div>
+        <pre id="scores"></pre>
+    </div>
+
+    <div class="box" style="grid-column: span 3;">
+        <div class="big">LIVE TRADE TAPE</div>
+        <div class="tape" id="trades"></div>
+    </div>
+
+</div>
+
+<script>
+
+async function load(){
+    const r = await fetch("/state");
+    const d = await r.json();
+
+    document.getElementById("equity").innerHTML =
+        "<span class='green'>$" + (d.equity || 0).toFixed(2) + "</span>";
+
+    document.getElementById("cash").innerText =
+        "$" + (d.cash || 0).toFixed(2);
+
+    document.getElementById("chop").innerHTML =
+        d.chop_zone ? "<span class='red'>CHOP</span>" : "<span class='green'>TREND</span>";
+
+    document.getElementById("agents").innerText =
+        JSON.stringify(d.active_agents || [], null, 2);
+
+    document.getElementById("scores").innerText =
+        JSON.stringify(d.agent_scores || {}, null, 2);
+
+    let tape = "";
+    (d.trades || []).slice(-20).reverse().forEach(t => {
+        tape += `<div class="trade">
+            ${t.symbol} | ${t.action} | $${t.price} | conf:${t.confidence}
+        </div>`;
+    });
+
+    document.getElementById("trades").innerHTML = tape;
+}
+
+setInterval(load, 1000);
+load();
+
+</script>
+
+</body>
+</html>
+"""
