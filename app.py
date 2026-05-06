@@ -1,6 +1,6 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import threading, time, asyncio
+import threading, time
 
 from execution_engine import ExecutionEngine
 from risk_engine import RiskEngine
@@ -21,14 +21,9 @@ trade_manager = TradeManager()
 evolver = EvolutionEngine(learn)
 head_trader = HeadTrader()
 
-tracker = PerformanceTracker()
-memory = TradeMemory()
-compound = CompoundEngine(portfolio)
-
 exec_engine = ExecutionEngine()
 risk_engine = RiskEngine(max_daily_loss=150)
 heatmap = HeatMap()
-
 analytics = Analytics()
 
 agents = [
@@ -39,60 +34,54 @@ agents = [
 ]
 
 # =========================
-# TRADE MEMORY
+# STATE
 # =========================
 trade_history = []
+daily_trade_count = 0
+last_trade_time = {}
+day_start_equity = 5000
+
+MAX_TRADES_PER_DAY = 20
+TRADE_COOLDOWN_SEC = 8
+
+cycle = 0
+last_heartbeat = {"t": time.time()}
 
 latest_state = {
     "equity": 5000,
     "cash": 5000,
-    "agent_scores": {},
-    "active_agents": [],
-    "chop_zone": False,
-    "heartbeat": time.time(),
+    "daily_trades": 0,
+    "max_trades": MAX_TRADES_PER_DAY,
     "trades": [],
     "trade_history": []
 }
 
-cycle = 0
-clients = []
-last_heartbeat = {"t": time.time()}
-
 # =========================
-# 🔒 PROP FIRM CONTROLS (NEW)
-# =========================
-MAX_TRADES_PER_DAY = 20
-TRADE_COOLDOWN_SEC = 8
-
-daily_trade_count = 0
-last_trade_time = {}   # symbol -> timestamp
-
-day_start_equity = 5000
-
-
-# =========================
-# RESET DAY FUNCTION
+# RESET DAY (FLAT MODE FIX)
 # =========================
 def reset_day():
-    global daily_trade_count, trade_history, day_start_equity, last_trade_time
+    global daily_trade_count, trade_history, last_trade_time, day_start_equity
+
+    # 🔥 CLOSE ALL POSITIONS
+    if hasattr(portfolio, "positions"):
+        for symbol, pos in list(portfolio.positions.items()):
+            try:
+                price = pos.get("price", None)
+                if price:
+                    portfolio.sell(symbol, price)
+
+                    for t in reversed(trade_history):
+                        if t["symbol"] == symbol and t["exit"] is None:
+                            t["exit"] = price
+                            t["pnl"] = round(price - t["entry"], 4)
+                            break
+            except:
+                pass
 
     daily_trade_count = 0
     trade_history = []
     last_trade_time = {}
     day_start_equity = portfolio.equity
-
-
-# =========================
-# RESET AGENTS
-# =========================
-def reset_agents():
-    return [
-        ("MomentumAI", MomentumAI()),
-        ("MeanReversionAI", MeanReversionAI()),
-        ("BreakoutAI", BreakoutAI()),
-        ("SentimentAI", SentimentAI())
-    ]
-
 
 # =========================
 # WATCHDOG
@@ -102,41 +91,19 @@ def watchdog():
     while True:
         time.sleep(10)
         if time.time() - last_heartbeat["t"] > 25:
-            agents = reset_agents()
+            agents = [
+                ("MomentumAI", MomentumAI()),
+                ("MeanReversionAI", MeanReversionAI()),
+                ("BreakoutAI", BreakoutAI()),
+                ("SentimentAI", SentimentAI())
+            ]
             last_heartbeat["t"] = time.time()
 
-
 # =========================
-# CHOP DETECTOR
-# =========================
-def detect_chop(mkt):
-    vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
-    if not vols:
-        return False
-
-    avg = sum(vols) / len(vols)
-    up = sum(1 for s in mkt if mkt[s]["trend"] == "UP")
-    down = sum(1 for s in mkt if mkt[s]["trend"] == "DOWN")
-
-    return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
-
-
-# =========================
-# CLOSE TRADE
-# =========================
-def close_trade(symbol, price):
-    for t in reversed(trade_history):
-        if t["symbol"] == symbol and t["exit"] is None:
-            t["exit"] = price
-            t["pnl"] = round(price - t["entry"], 4)
-            return
-
-
-# =========================
-# TRADING LOOP (PROP FIRM MODE)
+# TRADING LOOP
 # =========================
 def trading_loop():
-    global agents, latest_state, cycle, daily_trade_count
+    global cycle, daily_trade_count, latest_state
 
     while True:
         try:
@@ -149,23 +116,33 @@ def trading_loop():
 
             portfolio.update({s: mkt[s]["price"] for s in mkt})
 
-            trades = []
-            chop = detect_chop(mkt)
+            # 🔥 HARD FLAT PROTECTION (fix ghost equity movement)
+            if daily_trade_count == 0 and hasattr(portfolio, "positions"):
+                for symbol, pos in list(portfolio.positions.items()):
+                    try:
+                        price = mkt.get(symbol, {}).get("price", None)
+                        if price:
+                            portfolio.sell(symbol, price)
 
-            # =========================
-            # DAY RESET CHECK
-            # =========================
-            if portfolio.equity - day_start_equity > 2000 or daily_trade_count >= MAX_TRADES_PER_DAY:
-                reset_day()
+                            for t in reversed(trade_history):
+                                if t["symbol"] == symbol and t["exit"] is None:
+                                    t["exit"] = price
+                                    t["pnl"] = round(price - t["entry"], 4)
+                                    break
+                    except:
+                        pass
+
+            trades = []
 
             for symbol, data in mkt.items():
 
-                # =========================
-                # COOLDOWN CHECK
-                # =========================
+                # ⏱ cooldown
                 if symbol in last_trade_time:
                     if time.time() - last_trade_time[symbol] < TRADE_COOLDOWN_SEC:
                         continue
+
+                if daily_trade_count >= MAX_TRADES_PER_DAY:
+                    continue
 
                 votes, weights = [], []
 
@@ -182,25 +159,9 @@ def trading_loop():
 
                 allowed = risk.approve(portfolio, action, conf)
 
-                if allowed:
-                    allowed = head_trader.approve_trade(
-                        symbol, action, conf, data, portfolio, chop
-                    )
-
-                if chop:
-                    allowed = False
-
-                # =========================
-                # PROP FIRM LIMITS
-                # =========================
-                if daily_trade_count >= MAX_TRADES_PER_DAY:
-                    allowed = False
-
                 price = data["price"]
 
-                # =========================
-                # EXECUTION
-                # =========================
+                # BUY
                 if allowed and action == "BUY":
                     exec_engine.execute("BUY", symbol, price, conf)
                     portfolio.buy(symbol, price, conf)
@@ -217,17 +178,19 @@ def trading_loop():
                     daily_trade_count += 1
                     last_trade_time[symbol] = time.time()
 
+                # SELL
                 elif allowed and action == "SELL":
                     exec_engine.execute("SELL", symbol, price, conf)
                     portfolio.sell(symbol, price)
-                    close_trade(symbol, price)
+
+                    for t in reversed(trade_history):
+                        if t["symbol"] == symbol and t["exit"] is None:
+                            t["exit"] = price
+                            t["pnl"] = round(price - t["entry"], 4)
+                            break
 
                     daily_trade_count += 1
                     last_trade_time[symbol] = time.time()
-
-                for name, _ in agents:
-                    learn.update(name, conf)
-                    analytics.update(name, conf)
 
                 trades.append({
                     "symbol": symbol,
@@ -238,16 +201,13 @@ def trading_loop():
 
             cycle += 1
 
-            agents = [(n, evolver.mutate(a)) for n, a in agents]
-
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
-                "active_agents": [a[0] for a in agents],
-                "trades": trades[-20:],
-                "trade_history": trade_history[-100:],
                 "daily_trades": daily_trade_count,
-                "max_trades": MAX_TRADES_PER_DAY
+                "max_trades": MAX_TRADES_PER_DAY,
+                "trades": trades[-20:],
+                "trade_history": trade_history[-50:]
             }
 
             time.sleep(1.2)
@@ -256,13 +216,11 @@ def trading_loop():
             print("RECOVERED:", e)
             time.sleep(1)
 
-
 # =========================
 # START THREADS
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
-
 
 # =========================
 # ROUTES
@@ -271,58 +229,41 @@ threading.Thread(target=watchdog, daemon=True).start()
 def state():
     return latest_state
 
-
 @app.get("/reset_day")
 def reset_day_route():
     reset_day()
-    return {"status": "day reset complete"}
+    return {"status": "reset complete"}
 
-
+# =========================
+# UI
+# =========================
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
     return """
 <html>
-<head>
-<style>
-body { background:#05070a; color:#00ffcc; font-family:monospace; }
-button {
-    background:#00ffcc;
-    border:none;
-    padding:10px;
-    margin:10px;
-    cursor:pointer;
-}
-</style>
-</head>
-
-<body>
+<body style="background:#05070a;color:#00ffcc;font-family:monospace">
 
 <h2>PROP FIRM TERMINAL</h2>
 
-<button onclick="fetch('/reset_day')">
-RESET DAY
-</button>
+<button onclick="fetch('/reset_day')">RESET DAY</button>
 
 <div id="data"></div>
 
 <script>
-
 async function load(){
     const r = await fetch("/state");
     const d = await r.json();
 
     document.getElementById("data").innerHTML =
     `
-    <p>Equity: ${d.equity}</p>
-    <p>Cash: ${d.cash}</p>
-    <p>Trades Today: ${d.daily_trades}/${d.max_trades}</p>
+    Equity: ${d.equity}<br>
+    Cash: ${d.cash}<br>
+    Trades: ${d.daily_trades}/${d.max_trades}<br>
     <pre>${JSON.stringify(d.trade_history, null, 2)}</pre>
     `;
 }
-
 setInterval(load, 1000);
 load();
-
 </script>
 
 </body>
