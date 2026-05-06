@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import threading, time
+import threading, time, random
 
 from execution_engine import ExecutionEngine
 from risk_engine import RiskEngine
@@ -32,6 +32,46 @@ agents = [
 ]
 
 # =========================
+# CORE V MAX SYSTEM
+# =========================
+class CoreVMax:
+    def __init__(self):
+        self.risk_mode = "NORMAL"
+        self.last_trade_score = 0
+
+    def score_trade(self, action, conf, data, portfolio):
+        volatility = data.get("volatility", 1)
+        spread = data.get("spread", 0.01)
+
+        equity_factor = portfolio.equity / 5000
+        risk_penalty = 1 if equity_factor > 0.95 else 0.7
+
+        score = (conf * 100) * risk_penalty - (volatility * 10) - (spread * 50)
+        self.last_trade_score = score
+
+        return max(0, min(100, score))
+
+    def update_risk_mode(self, portfolio):
+        dd = (5000 - portfolio.equity) / 5000
+
+        if dd > 0.08:
+            self.risk_mode = "KILL"
+        elif dd > 0.04:
+            self.risk_mode = "CAUTION"
+        else:
+            self.risk_mode = "NORMAL"
+
+    def position_size(self, conf, equity):
+        base_risk = 0.02
+        multiplier = 0.5 if self.risk_mode == "CAUTION" else 1
+        return equity * base_risk * conf * multiplier
+
+    def allow_trade(self):
+        return self.risk_mode != "KILL"
+
+core = CoreVMax()
+
+# =========================
 # STATE
 # =========================
 trade_history = []
@@ -45,28 +85,20 @@ MAX_TRADES_PER_DAY = 20
 TRADE_COOLDOWN_SEC = 8
 
 last_heartbeat = {"t": time.time()}
-
 latest_state = {}
 
 # =========================
-# RESET DAY (FLAT MODE)
+# RESET DAY
 # =========================
 def reset_day():
     global daily_trade_count, trade_history, last_trade_time, day_start_equity
 
-    # CLOSE ALL POSITIONS
     if hasattr(portfolio, "positions"):
         for symbol, pos in list(portfolio.positions.items()):
             try:
                 price = pos.get("price", None)
                 if price:
                     portfolio.sell(symbol, price)
-
-                    for t in reversed(trade_history):
-                        if t["symbol"] == symbol and t["exit"] is None:
-                            t["exit"] = price
-                            t["pnl"] = round(price - t["entry"], 4)
-                            break
             except:
                 pass
 
@@ -92,7 +124,7 @@ def watchdog():
             last_heartbeat["t"] = time.time()
 
 # =========================
-# TRADING LOOP
+# TRADING LOOP (CORE V MAX)
 # =========================
 def trading_loop():
     global daily_trade_count, latest_state
@@ -108,21 +140,12 @@ def trading_loop():
 
             portfolio.update({s: mkt[s]["price"] for s in mkt})
 
-            # 🔥 HARD FLAT FIX
-            if daily_trade_count == 0 and hasattr(portfolio, "positions"):
-                for symbol, pos in list(portfolio.positions.items()):
-                    try:
-                        price = mkt.get(symbol, {}).get("price", None)
-                        if price:
-                            portfolio.sell(symbol, price)
+            # CORE V MAX RISK UPDATE
+            core.update_risk_mode(portfolio)
 
-                            for t in reversed(trade_history):
-                                if t["symbol"] == symbol and t["exit"] is None:
-                                    t["exit"] = price
-                                    t["pnl"] = round(price - t["entry"], 4)
-                                    break
-                    except:
-                        pass
+            if core.risk_mode == "KILL":
+                time.sleep(2)
+                continue
 
             for symbol, data in mkt.items():
 
@@ -145,13 +168,26 @@ def trading_loop():
                     weights.append(learn.weight(name))
 
                 action, conf = decide(votes, weights)
-                allowed = risk.approve(portfolio, action, conf)
+
+                score = core.score_trade(action, conf, data, portfolio)
+
+                allowed = (
+                    risk.approve(portfolio, action, conf)
+                    and core.allow_trade()
+                    and score > 55
+                )
 
                 price = data["price"]
 
+                # SLIPPAGE MODEL
+                slippage = price * random.uniform(0.0002, 0.0008)
+
                 if allowed and action == "BUY":
-                    exec_engine.execute("BUY", symbol, price, conf)
-                    portfolio.buy(symbol, price, conf)
+
+                    size = core.position_size(conf, portfolio.equity)
+
+                    exec_engine.execute("BUY", symbol, price + slippage, conf)
+                    portfolio.buy(symbol, price, size)
 
                     trade_history.append({
                         "symbol": symbol,
@@ -164,7 +200,8 @@ def trading_loop():
                     last_trade_time[symbol] = time.time()
 
                 elif allowed and action == "SELL":
-                    exec_engine.execute("SELL", symbol, price, conf)
+
+                    exec_engine.execute("SELL", symbol, price - slippage, conf)
                     portfolio.sell(symbol, price)
 
                     for t in reversed(trade_history):
@@ -176,12 +213,10 @@ def trading_loop():
                     daily_trade_count += 1
                     last_trade_time[symbol] = time.time()
 
-            # 📊 WIN RATE
             closed = [t for t in trade_history if t["exit"] is not None]
             wins = [t for t in closed if t["pnl"] > 0]
             win_rate = round((len(wins) / len(closed)) * 100, 2) if closed else 0
 
-            # 📈 EQUITY CURVE
             equity_curve.append(round(portfolio.equity, 2))
             if len(equity_curve) > 200:
                 equity_curve.pop(0)
@@ -192,6 +227,8 @@ def trading_loop():
                 "daily_trades": daily_trade_count,
                 "max_trades": MAX_TRADES_PER_DAY,
                 "win_rate": win_rate,
+                "risk_mode": core.risk_mode,
+                "last_trade_score": round(core.last_trade_score, 2),
                 "equity_curve": equity_curve,
                 "trade_history": trade_history[-50:]
             }
@@ -221,7 +258,7 @@ def reset_day_route():
     return {"status": "reset complete"}
 
 # =========================
-# UI (FULL TERMINAL)
+# UI
 # =========================
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
@@ -234,14 +271,12 @@ def ui():
 body { background:#05070a; color:#00ffcc; font-family:monospace; }
 .green { color:#00ff88; }
 .red { color:#ff4d4d; }
-table { width:100%; }
-td { padding:4px; border-bottom:1px solid #222; }
 </style>
 </head>
 
 <body>
 
-<h2>PROP FIRM TERMINAL</h2>
+<h2>CORE V MAX PROP FIRM TERMINAL</h2>
 <button onclick="fetch('/reset_day')">RESET DAY</button>
 
 <div id="stats"></div>
@@ -256,37 +291,20 @@ async function load(){
     const d = await r.json();
 
     document.getElementById("stats").innerHTML =
-    `Equity: $${d.equity} | Cash: $${d.cash} | Trades: ${d.daily_trades}/${d.max_trades} | WinRate: ${d.win_rate}%`;
+    `Equity: $${d.equity} | Trades: ${d.daily_trades}/${d.max_trades} | WinRate: ${d.win_rate}% | Risk: ${d.risk_mode} | Score: ${d.last_trade_score}`;
 
     const ctx = document.getElementById('chart').getContext('2d');
 
     if(!chart){
         chart = new Chart(ctx,{
             type:'line',
-            data:{
-                labels:d.equity_curve.map((_,i)=>i),
-                datasets:[{data:d.equity_curve}]
-            }
+            data:{labels:d.equity_curve.map((_,i)=>i),datasets:[{data:d.equity_curve}]}
         });
     } else {
         chart.data.labels = d.equity_curve.map((_,i)=>i);
         chart.data.datasets[0].data = d.equity_curve;
         chart.update();
     }
-
-    let rows = "<tr><td>Symbol</td><td>Entry</td><td>Exit</td><td>PnL</td></tr>";
-
-    d.trade_history.forEach(t=>{
-        let c = t.pnl > 0 ? "green" : "red";
-        rows += `<tr>
-            <td>${t.symbol}</td>
-            <td>${t.entry}</td>
-            <td>${t.exit ?? "-"}</td>
-            <td class="${c}">${t.pnl}</td>
-        </tr>`;
-    });
-
-    document.getElementById("trades").innerHTML = rows;
 }
 
 setInterval(load,1000);
