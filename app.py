@@ -171,3 +171,6 @@ load();
 </body>
 </html>
 """
+@app.get("/ui", response_class=HTMLResponse)
+def ui_alias():
+    return ui()
