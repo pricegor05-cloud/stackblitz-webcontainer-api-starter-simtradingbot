@@ -3,6 +3,9 @@ import math
 import random
 import time
 
+# =========================
+# 📊 DAY TRADING ENGINE (FIXED)
+# =========================
 class DayTradingEngine:
     def __init__(self):
         self.trade_log = []
@@ -12,13 +15,13 @@ class DayTradingEngine:
             "pnl": 0.0
         })
         self.daily_pnl = 0.0
-        self.max_daily_loss = -200  # safety lock
+        self.max_daily_loss = -200
         self.max_daily_profit = 300
 
-    # -------------------------
-    # LOG TRADE
-    # -------------------------
     def log_trade(self, agent, symbol, action, entry, exit_price):
+        if exit_price is None:
+            return
+
         pnl = (exit_price - entry) if action == "BUY" else (entry - exit_price)
 
         self.trade_log.append({
@@ -38,33 +41,22 @@ class DayTradingEngine:
         else:
             stats["losses"] += 1
 
-    # -------------------------
-    # WIN RATE
-    # -------------------------
     def win_rate(self, agent):
         s = self.agent_stats[agent]
         total = s["wins"] + s["losses"]
-        if total == 0:
-            return 0.5
-        return s["wins"] / total
+        return s["wins"] / total if total > 0 else 0.5
 
-    # -------------------------
-    # RISK LOCK
-    # -------------------------
     def allow_trading(self):
-        if self.daily_pnl < self.max_daily_loss:
-            return False
-        return True
+        return self.daily_pnl >= self.max_daily_loss
 
-    # -------------------------
-    # RESET DAY (FOR OVERNIGHT FLAT)
-    # -------------------------
     def reset_day(self):
         self.trade_log.clear()
         self.daily_pnl = 0.0
+        self.agent_stats.clear()
+
 
 # =========================
-# 💰 PORTFOLIO
+# 💰 PORTFOLIO (FIXED EQUITY LOGIC)
 # =========================
 class Portfolio:
     def __init__(self, cash=5000):
@@ -74,9 +66,11 @@ class Portfolio:
 
     def update(self, prices):
         total = self.cash
+
         for s, pos in self.positions.items():
             if s in prices:
                 total += pos["qty"] * prices[s]
+
         self.equity = total
 
     def buy(self, symbol, price, confidence=0.5):
@@ -98,15 +92,12 @@ class Portfolio:
         }
 
     def sell(self, symbol, price):
-        if symbol in self.positions:
-            pos = self.positions[symbol]
-            self.cash += pos["qty"] * price
-            del self.positions[symbol]
+        if symbol not in self.positions:
+            return
 
-    def compound(self):
-        gain = self.equity - 5000
-        if gain > 0:
-            self.cash += gain * 0.05
+        pos = self.positions[symbol]
+        self.cash += pos["qty"] * price
+        del self.positions[symbol]
 
 
 # =========================
@@ -126,11 +117,7 @@ class BreakoutAI:
 
 class SentimentAI:
     def decide(self, d):
-        return random.choice([
-            ("BUY", 0.6),
-            ("SELL", 0.6),
-            ("HOLD", 0.5)
-        ])
+        return random.choice([("BUY", 0.6), ("SELL", 0.6), ("HOLD", 0.5)])
 
 
 # =========================
@@ -155,7 +142,7 @@ class LearningSystem:
 
 
 # =========================
-# 📊 ANALYTICS (SHARPE)
+# 📊 ANALYTICS
 # =========================
 class Analytics:
     def __init__(self):
@@ -172,10 +159,7 @@ class Analytics:
         avg = sum(data) / len(data)
         var = sum((x - avg) ** 2 for x in data) / len(data)
 
-        if var == 0:
-            return 0
-
-        return avg / math.sqrt(var)
+        return avg / math.sqrt(var) if var != 0 else 0
 
 
 # =========================
@@ -216,34 +200,30 @@ class TradeManager:
         pos = portfolio.positions[symbol]
         change = (price - pos["entry"]) / pos["entry"]
 
-        return (
-            change <= -self.stop_loss or
-            change >= self.take_profit
-        )
+        return change <= -self.stop_loss or change >= self.take_profit
 
 
 # =========================
-# 🧬 EVOLUTION
+# 🧬 EVOLUTION ENGINE
 # =========================
 class EvolutionEngine:
     def __init__(self, learn):
         self.learn = learn
 
     def mutate(self, agent):
-        class M:
+        class Wrapped:
             def decide(self, d):
                 try:
                     a, c = agent.decide(d)
                 except:
                     return "HOLD", 0.5
 
-                if random.random() < 0.05:
-                    return "BUY", 0.9
-                if random.random() < 0.05:
-                    return "SELL", 0.9
+                if random.random() < 0.03:
+                    return random.choice(["BUY", "SELL"]), 0.9
 
                 return a, c
-        return M()
+
+        return Wrapped()
 
 
 # =========================
@@ -253,10 +233,8 @@ class HeadTrader:
     def approve_trade(self, s, a, c, d, portfolio, chop=False):
         if chop or c < 0.6:
             return False
-
         if a == "BUY" and d.get("trend") == "DOWN":
             return False
-
         return True
 
 
@@ -265,7 +243,6 @@ class HeadTrader:
 # =========================
 def detect_chop(mkt):
     vols = [mkt[s]["vol"] for s in mkt if "vol" in mkt[s]]
-
     if not vols:
         return False
 
@@ -298,7 +275,7 @@ class PerformanceTracker:
         avg = sum(h) / len(h)
         std = (sum((x - avg) ** 2 for x in h) / len(h)) ** 0.5
 
-        return avg / std if std != 0 else avg * 10
+        return avg / std if std != 0 else 0
 
 
 # =========================
@@ -328,6 +305,9 @@ class CompoundEngine:
         self.portfolio = portfolio
 
     def run(self):
+        if self.portfolio.cash <= 0:
+            return
+
         growth = (self.portfolio.equity - self.portfolio.cash) / max(self.portfolio.cash, 1)
 
         if growth > 0.02:
