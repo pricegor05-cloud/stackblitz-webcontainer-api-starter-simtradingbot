@@ -2,6 +2,10 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 import threading, time, asyncio
 
+from execution_engine import ExecutionEngine
+from risk_engine import RiskEngine
+from heatmap import HeatMap
+
 from engine import *
 from stream_market import market
 
@@ -22,7 +26,14 @@ memory = TradeMemory()
 compound = CompoundEngine(portfolio)
 
 # =========================
-# FIX 1 — ADD MISSING ANALYTICS (CRITICAL)
+# 🔥 ENGINE LAYER
+# =========================
+exec_engine = ExecutionEngine()
+risk_engine = RiskEngine(max_daily_loss=150)
+heatmap = HeatMap()
+
+# =========================
+# ANALYTICS
 # =========================
 analytics = Analytics()
 
@@ -34,7 +45,7 @@ agents = [
 ]
 
 # =========================
-# FIX 2 — TRADE MEMORY ENGINE (REAL PNL)
+# TRADE MEMORY
 # =========================
 trade_history = []
 
@@ -90,7 +101,7 @@ def detect_chop(mkt):
     return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
 # =========================
-# FIX 3 — SAFE TRADE MATCHING
+# TRADE CLOSE MATCH
 # =========================
 def close_trade(symbol, price):
     for t in reversed(trade_history):
@@ -100,10 +111,10 @@ def close_trade(symbol, price):
             return
 
 # =========================
-# TRADING LOOP (FULL FIXED ENGINE)
+# TRADING LOOP
 # =========================
 def trading_loop():
-    global agents, latest_state, cycle
+    global agents, latest_state, cycle, heatmap
 
     while True:
         try:
@@ -114,7 +125,17 @@ def trading_loop():
                 time.sleep(1)
                 continue
 
-            portfolio.update({s: mkt[s]["price"] for s in mkt})
+            prices = {s: mkt[s]["price"] for s in mkt}
+            portfolio.update(prices)
+
+            # =========================
+            # 🔴 STEP 6 — KILL SWITCH
+            # =========================
+            if not risk_engine.allow_trade(portfolio.equity):
+                for s in list(portfolio.positions.keys()):
+                    if s in prices:
+                        portfolio.sell(s, prices[s])
+                continue
 
             trades = []
             chop = detect_chop(mkt)
@@ -145,17 +166,21 @@ def trading_loop():
                     allowed = False
 
                 price = data["price"]
+                qty = max(1, int(conf * 10))
 
                 # =========================
-                # FIX 4 — REAL TRADE EXECUTION
+                # 🔵 STEP 5 — EXECUTION ENGINE
                 # =========================
                 if allowed and action == "BUY":
-                    portfolio.buy(symbol, price, conf)
+                    order = exec_engine.execute(symbol, "BUY", price, qty)
+
+                    portfolio.buy(symbol, order["price"], conf)
+                    heatmap.update(symbol, qty)
 
                     trade_history.append({
                         "symbol": symbol,
                         "side": "BUY",
-                        "entry": price,
+                        "entry": order["price"],
                         "exit": None,
                         "pnl": 0,
                         "confidence": conf,
@@ -163,8 +188,12 @@ def trading_loop():
                     })
 
                 elif allowed and action == "SELL":
-                    portfolio.sell(symbol, price)
-                    close_trade(symbol, price)
+                    order = exec_engine.execute(symbol, "SELL", price, qty)
+
+                    portfolio.sell(symbol, order["price"])
+                    heatmap.update(symbol, -qty)
+
+                    close_trade(symbol, order["price"])
 
                 pnl = conf
 
@@ -183,12 +212,16 @@ def trading_loop():
             cycle += 1
 
             # =========================
-            # FIX 5 — AGENT EVOLUTION
+            # 🔁 STEP 7 — DAILY RESET
             # =========================
+            if cycle % 200 == 0:
+                risk_engine.reset_day(portfolio.equity)
+                heatmap = HeatMap()
+
             agents = [(n, evolver.mutate(a)) for n, a in agents]
 
             # =========================
-            # FIX 6 — SAFE STATE UPDATE (NO CRASHES)
+            # 🟢 STEP 8 — STATE UPDATE
             # =========================
             latest_state = {
                 "equity": round(portfolio.equity, 2),
@@ -198,7 +231,12 @@ def trading_loop():
                 "chop_zone": chop,
                 "heartbeat": last_heartbeat["t"],
                 "trades": trades[-20:],
-                "trade_history": trade_history[-100:]
+                "trade_history": trade_history[-100:],
+
+                # NEW DATA
+                "heatmap": heatmap.snapshot(),
+                "risk_score": heatmap.total_risk(),
+                "executions": exec_engine.orders[-20:]
             }
 
             time.sleep(1.2)
@@ -227,14 +265,21 @@ def ui():
 <html>
 <head>
 <title>PRO AI TRADING TERMINAL</title>
+
 <style>
-body { margin:0; background:#05070a; color:#00ffcc; font-family: monospace; }
+body {
+    margin:0;
+    background:#05070a;
+    color:#00ffcc;
+    font-family: monospace;
+}
 .header { padding:15px; text-align:center; }
 .grid { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; padding:12px; }
 .box { background:#0f172a; padding:12px; border-radius:10px; }
 .big { font-size:24px; font-weight:bold; }
 .green { color:#00ff88; }
-.tape { height:200px; overflow:auto; background:#0b1220; padding:10px; }
+.red { color:#ff4d4d; }
+.tape { height:200px; overflow:auto; background:#0b1220; padding:10px; border-radius:10px; }
 .trade { border-bottom:1px solid #1f2937; padding:5px; font-size:12px; }
 </style>
 </head>
@@ -278,6 +323,7 @@ body { margin:0; background:#05070a; color:#00ffcc; font-family: monospace; }
 </div>
 
 <script>
+
 async function load(){
     const r = await fetch("/state");
     const d = await r.json();
@@ -307,6 +353,7 @@ async function load(){
 
 setInterval(load, 1000);
 load();
+
 </script>
 
 </body>
