@@ -2,13 +2,17 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 import threading, time, asyncio
 
+from execution_engine import ExecutionEngine
+from risk_engine import RiskEngine
+from heatmap import HeatMap
+
 from engine import *
 from stream_market import market
 
 app = FastAPI()
 
 # =========================
-# CORE SYSTEM (UNCHANGED)
+# CORE SYSTEM
 # =========================
 portfolio = Portfolio(5000)
 learn = LearningSystem()
@@ -21,6 +25,10 @@ tracker = PerformanceTracker()
 memory = TradeMemory()
 compound = CompoundEngine(portfolio)
 
+exec_engine = ExecutionEngine()
+risk_engine = RiskEngine(max_daily_loss=150)
+heatmap = HeatMap()
+
 analytics = Analytics()
 
 agents = [
@@ -31,38 +39,48 @@ agents = [
 ]
 
 # =========================
-# 🔒 SINGLE SOURCE OF TRUTH (LEDGER)
+# TRADE MEMORY
 # =========================
-trade_ledger = []
-positions = {}   # symbol -> open trade
+trade_history = []
 
-# =========================
-# DAY TRADING CONTROLS
-# =========================
-MAX_TRADES_PER_DAY = 30
-daily_trades = 0
-daily_start_equity = 5000
+latest_state = {
+    "equity": 5000,
+    "cash": 5000,
+    "agent_scores": {},
+    "active_agents": [],
+    "chop_zone": False,
+    "heartbeat": time.time(),
+    "trades": [],
+    "trade_history": []
+}
 
 cycle = 0
 clients = []
 last_heartbeat = {"t": time.time()}
 
 # =========================
-# STABLE STATE (NEVER CHANGES SHAPE)
+# 🔒 PROP FIRM CONTROLS (NEW)
 # =========================
-latest_state = {
-    "equity": 5000,
-    "cash": 5000,
-    "daily_pnl": 0,
-    "daily_trades": 0,
-    "win_rate": 0,
-    "agent_scores": {},
-    "active_agents": [],
-    "chop_zone": False,
-    "heartbeat": time.time(),
-    "trades": [],
-    "ledger": []
-}
+MAX_TRADES_PER_DAY = 20
+TRADE_COOLDOWN_SEC = 8
+
+daily_trade_count = 0
+last_trade_time = {}   # symbol -> timestamp
+
+day_start_equity = 5000
+
+
+# =========================
+# RESET DAY FUNCTION
+# =========================
+def reset_day():
+    global daily_trade_count, trade_history, day_start_equity, last_trade_time
+
+    daily_trade_count = 0
+    trade_history = []
+    last_trade_time = {}
+    day_start_equity = portfolio.equity
+
 
 # =========================
 # RESET AGENTS
@@ -74,6 +92,19 @@ def reset_agents():
         ("BreakoutAI", BreakoutAI()),
         ("SentimentAI", SentimentAI())
     ]
+
+
+# =========================
+# WATCHDOG
+# =========================
+def watchdog():
+    global agents
+    while True:
+        time.sleep(10)
+        if time.time() - last_heartbeat["t"] > 25:
+            agents = reset_agents()
+            last_heartbeat["t"] = time.time()
+
 
 # =========================
 # CHOP DETECTOR
@@ -89,26 +120,23 @@ def detect_chop(mkt):
 
     return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
+
 # =========================
-# CLOSE TRADE (REAL PNL ENGINE)
+# CLOSE TRADE
 # =========================
 def close_trade(symbol, price):
-    global trade_ledger
-
-    for t in reversed(trade_ledger):
+    for t in reversed(trade_history):
         if t["symbol"] == symbol and t["exit"] is None:
             t["exit"] = price
             t["pnl"] = round(price - t["entry"], 4)
-            positions.pop(symbol, None)
-            return t
+            return
 
-    return None
 
 # =========================
-# TRADING LOOP (CORE ENGINE)
+# TRADING LOOP (PROP FIRM MODE)
 # =========================
 def trading_loop():
-    global agents, cycle, daily_trades, latest_state
+    global agents, latest_state, cycle, daily_trade_count
 
     while True:
         try:
@@ -125,26 +153,19 @@ def trading_loop():
             chop = detect_chop(mkt)
 
             # =========================
-            # DAILY RESET
+            # DAY RESET CHECK
             # =========================
-            if cycle % 200 == 0:
-                daily_trades = 0
-                daily_start_equity = portfolio.equity
-                positions.clear()
-
-            daily_pnl = portfolio.equity - daily_start_equity
-
-            # =========================
-            # FLATTEN RULE (NO OVERNIGHT)
-            # =========================
-            if daily_trades >= MAX_TRADES_PER_DAY:
-                for s in list(positions.keys()):
-                    portfolio.sell(s, mkt[s]["price"])
-                    close_trade(s, mkt[s]["price"])
-                time.sleep(1)
-                continue
+            if portfolio.equity - day_start_equity > 2000 or daily_trade_count >= MAX_TRADES_PER_DAY:
+                reset_day()
 
             for symbol, data in mkt.items():
+
+                # =========================
+                # COOLDOWN CHECK
+                # =========================
+                if symbol in last_trade_time:
+                    if time.time() - last_trade_time[symbol] < TRADE_COOLDOWN_SEC:
+                        continue
 
                 votes, weights = [], []
 
@@ -169,76 +190,64 @@ def trading_loop():
                 if chop:
                     allowed = False
 
+                # =========================
+                # PROP FIRM LIMITS
+                # =========================
+                if daily_trade_count >= MAX_TRADES_PER_DAY:
+                    allowed = False
+
                 price = data["price"]
 
                 # =========================
-                # BUY LOGIC
+                # EXECUTION
                 # =========================
-                if allowed and action == "BUY" and symbol not in positions:
+                if allowed and action == "BUY":
+                    exec_engine.execute("BUY", symbol, price, conf)
                     portfolio.buy(symbol, price, conf)
 
-                    positions[symbol] = {
-                        "entry": price,
-                        "time": time.time()
-                    }
-
-                    trade_ledger.append({
+                    trade_history.append({
                         "symbol": symbol,
+                        "side": "BUY",
                         "entry": price,
                         "exit": None,
                         "pnl": 0,
-                        "side": "BUY"
+                        "time": time.time()
                     })
 
-                    daily_trades += 1
+                    daily_trade_count += 1
+                    last_trade_time[symbol] = time.time()
 
-                # =========================
-                # SELL LOGIC
-                # =========================
-                elif allowed and action == "SELL" and symbol in positions:
+                elif allowed and action == "SELL":
+                    exec_engine.execute("SELL", symbol, price, conf)
                     portfolio.sell(symbol, price)
                     close_trade(symbol, price)
-                    daily_trades += 1
 
-                pnl_signal = conf
+                    daily_trade_count += 1
+                    last_trade_time[symbol] = time.time()
 
                 for name, _ in agents:
-                    learn.update(name, pnl_signal)
-                    analytics.update(name, pnl_signal)
+                    learn.update(name, conf)
+                    analytics.update(name, conf)
 
                 trades.append({
                     "symbol": symbol,
                     "action": action,
-                    "confidence": round(conf, 2),
-                    "price": round(price, 2)
+                    "price": round(price, 2),
+                    "allowed": allowed
                 })
 
             cycle += 1
+
             agents = [(n, evolver.mutate(a)) for n, a in agents]
 
-            # =========================
-            # WIN RATE
-            # =========================
-            wins = sum(1 for t in trade_ledger if t["pnl"] > 0)
-            losses = sum(1 for t in trade_ledger if t["pnl"] < 0)
-            total = wins + losses
-            win_rate = (wins / total * 100) if total > 0 else 0
-
-            # =========================
-            # STATE (LOCKED SHAPE)
-            # =========================
             latest_state = {
                 "equity": round(portfolio.equity, 2),
                 "cash": round(portfolio.cash, 2),
-                "daily_pnl": round(daily_pnl, 2),
-                "daily_trades": daily_trades,
-                "win_rate": round(win_rate, 2),
-                "agent_scores": learn.agent_score,
                 "active_agents": [a[0] for a in agents],
-                "chop_zone": chop,
-                "heartbeat": last_heartbeat["t"],
                 "trades": trades[-20:],
-                "ledger": trade_ledger[-100:]
+                "trade_history": trade_history[-100:],
+                "daily_trades": daily_trade_count,
+                "max_trades": MAX_TRADES_PER_DAY
             }
 
             time.sleep(1.2)
@@ -247,10 +256,13 @@ def trading_loop():
             print("RECOVERED:", e)
             time.sleep(1)
 
+
 # =========================
-# START SYSTEM
+# START THREADS
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
+threading.Thread(target=watchdog, daemon=True).start()
+
 
 # =========================
 # ROUTES
@@ -259,32 +271,60 @@ threading.Thread(target=trading_loop, daemon=True).start()
 def state():
     return latest_state
 
+
+@app.get("/reset_day")
+def reset_day_route():
+    reset_day()
+    return {"status": "day reset complete"}
+
+
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
     return """
-    <html>
-    <body style="background:#05070a;color:#00ffcc;font-family:monospace">
-        <h2>LOCKED PROP FIRM CORE</h2>
+<html>
+<head>
+<style>
+body { background:#05070a; color:#00ffcc; font-family:monospace; }
+button {
+    background:#00ffcc;
+    border:none;
+    padding:10px;
+    margin:10px;
+    cursor:pointer;
+}
+</style>
+</head>
 
-        <div id="data"></div>
+<body>
 
-        <script>
-        async function load(){
-            const r = await fetch("/state");
-            const d = await r.json();
+<h2>PROP FIRM TERMINAL</h2>
 
-            document.getElementById("data").innerHTML =
-            `
-            Equity: ${d.equity}<br>
-            Cash: ${d.cash}<br>
-            Daily PnL: ${d.daily_pnl}<br>
-            Trades: ${d.daily_trades}<br>
-            Win Rate: ${d.win_rate}%<br>
-            `;
-        }
-        setInterval(load, 1000);
-        load();
-        </script>
-    </body>
-    </html>
-    """
+<button onclick="fetch('/reset_day')">
+RESET DAY
+</button>
+
+<div id="data"></div>
+
+<script>
+
+async function load(){
+    const r = await fetch("/state");
+    const d = await r.json();
+
+    document.getElementById("data").innerHTML =
+    `
+    <p>Equity: ${d.equity}</p>
+    <p>Cash: ${d.cash}</p>
+    <p>Trades Today: ${d.daily_trades}/${d.max_trades}</p>
+    <pre>${JSON.stringify(d.trade_history, null, 2)}</pre>
+    `;
+}
+
+setInterval(load, 1000);
+load();
+
+</script>
+
+</body>
+</html>
+"""
