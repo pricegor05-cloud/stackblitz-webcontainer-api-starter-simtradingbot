@@ -21,6 +21,11 @@ tracker = PerformanceTracker()
 memory = TradeMemory()
 compound = CompoundEngine(portfolio)
 
+# =========================
+# FIX 1 — ADD MISSING ANALYTICS (CRITICAL)
+# =========================
+analytics = Analytics()
+
 agents = [
     ("MomentumAI", MomentumAI()),
     ("MeanReversionAI", MeanReversionAI()),
@@ -29,7 +34,7 @@ agents = [
 ]
 
 # =========================
-# TRADE HISTORY (STEP 1 FIX)
+# FIX 2 — TRADE MEMORY ENGINE (REAL PNL)
 # =========================
 trade_history = []
 
@@ -85,12 +90,20 @@ def detect_chop(mkt):
     return avg < 0.9 and abs(up - down) < len(mkt) * 0.2
 
 # =========================
-# TRADING LOOP (FIXED PNL ENGINE)
+# FIX 3 — SAFE TRADE MATCHING
+# =========================
+def close_trade(symbol, price):
+    for t in reversed(trade_history):
+        if t["symbol"] == symbol and t["exit"] is None:
+            t["exit"] = price
+            t["pnl"] = round(price - t["entry"], 4)
+            return
+
+# =========================
+# TRADING LOOP (FULL FIXED ENGINE)
 # =========================
 def trading_loop():
     global agents, latest_state, cycle
-
-    analytics = Analytics()
 
     while True:
         try:
@@ -134,9 +147,8 @@ def trading_loop():
                 price = data["price"]
 
                 # =========================
-                # STEP 2 + 3 FIX: BUY/SELL LOGIC
+                # FIX 4 — REAL TRADE EXECUTION
                 # =========================
-
                 if allowed and action == "BUY":
                     portfolio.buy(symbol, price, conf)
 
@@ -152,13 +164,7 @@ def trading_loop():
 
                 elif allowed and action == "SELL":
                     portfolio.sell(symbol, price)
-
-                    # match last open trade
-                    for t in reversed(trade_history):
-                        if t["symbol"] == symbol and t["exit"] is None:
-                            t["exit"] = price
-                            t["pnl"] = round(price - t["entry"], 4)
-                            break
+                    close_trade(symbol, price)
 
                 pnl = conf
 
@@ -175,10 +181,14 @@ def trading_loop():
                 })
 
             cycle += 1
+
+            # =========================
+            # FIX 5 — AGENT EVOLUTION
+            # =========================
             agents = [(n, evolver.mutate(a)) for n, a in agents]
 
             # =========================
-            # STEP 4: SAFE STATE UPDATE
+            # FIX 6 — SAFE STATE UPDATE (NO CRASHES)
             # =========================
             latest_state = {
                 "equity": round(portfolio.equity, 2),
@@ -188,8 +198,6 @@ def trading_loop():
                 "chop_zone": chop,
                 "heartbeat": last_heartbeat["t"],
                 "trades": trades[-20:],
-
-                # FULL TRADE HISTORY
                 "trade_history": trade_history[-100:]
             }
 
@@ -206,7 +214,7 @@ threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
 
 # =========================
-# ROUTES (STEP 5 FIX)
+# ROUTES
 # =========================
 @app.get("/state")
 def state():
@@ -219,21 +227,14 @@ def ui():
 <html>
 <head>
 <title>PRO AI TRADING TERMINAL</title>
-
 <style>
-body {
-    margin:0;
-    background:#05070a;
-    color:#00ffcc;
-    font-family: monospace;
-}
+body { margin:0; background:#05070a; color:#00ffcc; font-family: monospace; }
 .header { padding:15px; text-align:center; }
 .grid { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; padding:12px; }
 .box { background:#0f172a; padding:12px; border-radius:10px; }
 .big { font-size:24px; font-weight:bold; }
 .green { color:#00ff88; }
-.red { color:#ff4d4d; }
-.tape { height:200px; overflow:auto; background:#0b1220; padding:10px; border-radius:10px; }
+.tape { height:200px; overflow:auto; background:#0b1220; padding:10px; }
 .trade { border-bottom:1px solid #1f2937; padding:5px; font-size:12px; }
 </style>
 </head>
@@ -277,7 +278,6 @@ body {
 </div>
 
 <script>
-
 async function load(){
     const r = await fetch("/state");
     const d = await r.json();
@@ -307,7 +307,6 @@ async function load(){
 
 setInterval(load, 1000);
 load();
-
 </script>
 
 </body>
