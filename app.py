@@ -5,82 +5,115 @@ import time
 
 app = FastAPI()
 
-# =========================
-# MOCK MARKET DATA ENGINE
-# (replace later with yfinance / real API)
-# =========================
-WATCHLIST = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "AMD", "GOOGL"]
+WATCHLIST = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "AMD"]
 
-def get_market_data(symbol):
-    # fake but structured realism
+# =========================
+# 1. MOCK PRICE HISTORY ENGINE
+# =========================
+def get_price_history(symbol):
     return {
-        "symbol": symbol,
-        "price": round(random.uniform(50, 500), 2),
+        "returns_5d": random.uniform(-0.05, 0.05),
+        "returns_20d": random.uniform(-0.10, 0.10),
         "volatility": random.uniform(0.5, 3.0),
-        "momentum": random.uniform(-2, 2),
-        "volume_spike": random.uniform(0, 2),
-        "news_sentiment": random.uniform(-1, 1),
-        "social_hype": random.uniform(-1, 1)
+        "volume_trend": random.uniform(-1, 1)
     }
 
 # =========================
-# AI SCORING ENGINE
+# 2. TWITTER/X SENTIMENT (API READY STUB)
 # =========================
-def ai_score(data):
+def twitter_sentiment(symbol):
+    # Replace later with X API (tweepy)
+    return {
+        "tweet_sentiment": random.uniform(-1, 1),
+        "tweet_volume": random.uniform(0, 2),
+        "viral_score": random.uniform(-1, 1)
+    }
+
+# =========================
+# 3. FINBERT-STYLE NEWS NLP (SIMULATED STRUCTURE)
+# =========================
+def finbert_news_sentiment(symbol):
+    # Replace later with transformers pipeline
+    return {
+        "news_sentiment": random.uniform(-1, 1),
+        "news_confidence": random.uniform(0.5, 1.0)
+    }
+
+# =========================
+# 4. FEATURE ENGINE (ML INPUT VECTOR)
+# =========================
+def build_features(symbol):
+    price = get_price_history(symbol)
+    twitter = twitter_sentiment(symbol)
+    news = finbert_news_sentiment(symbol)
+
+    return {
+        **price,
+        **twitter,
+        **news
+    }
+
+# =========================
+# 5. ML MODEL (SIMULATED WEIGHTED REGRESSION)
+# =========================
+def ml_model(features):
     score =
-        (data["momentum"] * 25) +
-        (data["news_sentiment"] * 20) +
-        (data["social_hype"] * 15) +
-        (data["volume_spike"] * 10) -
-        (data["volatility"] * 8)
+        (features["returns_5d"] * 120) +
+        (features["returns_20d"] * 80) +
+        (features["tweet_sentiment"] * 60) +
+        (features["news_sentiment"] * 70) +
+        (features["viral_score"] * 40) +
+        (features["volume_trend"] * 30) -
+        (features["volatility"] * 25)
 
     return max(-100, min(100, score))
 
-def classify(score):
+# =========================
+# 6. SIGNAL CLASSIFIER
+# =========================
+def signal(score):
     if score > 35:
-        return "BUY"
+        return "BUY (Bullish Bias)"
     elif score < -35:
-        return "SELL"
+        return "SELL (Bearish Bias)"
     else:
-        return "WATCH"
+        return "WATCH (Neutral)"
 
 # =========================
-# SCAN ENGINE
+# 7. SCANNER ENGINE
 # =========================
-def scan_market():
+def scan():
     results = []
 
     for symbol in WATCHLIST:
-        data = get_market_data(symbol)
-        score = ai_score(data)
-        signal = classify(score)
+        features = build_features(symbol)
+        score = ml_model(features)
 
         results.append({
             "symbol": symbol,
             "score": round(score, 2),
-            "signal": signal,
-            "price": data["price"],
-            "momentum": round(data["momentum"], 2),
-            "sentiment": round(data["news_sentiment"], 2),
-            "hype": round(data["social_hype"], 2)
+            "signal": signal(score),
+            "features": {
+                "twitter": round(features["tweet_sentiment"], 2),
+                "news": round(features["news_sentiment"], 2),
+                "returns_5d": round(features["returns_5d"], 3)
+            }
         })
 
-    # rank strongest first
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results
+    return sorted(results, key=lambda x: x["score"], reverse=True)
 
 # =========================
 # API ENDPOINT
 # =========================
 @app.get("/scan")
-def scan():
+def scan_api():
     return {
         "timestamp": time.time(),
-        "top_picks": scan_market()
+        "results": scan()
     }
 
 # =========================
-# SIMPLE UI
+# UI DASHBOARD
 # =========================
 @app.get("/", response_class=HTMLResponse)
 def ui():
@@ -98,8 +131,9 @@ td, th { padding:8px; border-bottom:1px solid #222; }
 </head>
 
 <body>
-<h2>AI NEXT DAY STOCK BIAS ENGINE</h2>
-<button onclick="load()">SCAN</button>
+
+<h2>AI SENTIMENT + ML STOCK BIAS ENGINE</h2>
+<button onclick="load()">SCAN MARKET</button>
 
 <table id="table"></table>
 
@@ -108,16 +142,16 @@ async function load(){
     const r = await fetch("/scan");
     const d = await r.json();
 
-    let rows = "<tr><th>Symbol</th><th>Score</th><th>Signal</th><th>Price</th><th>Momentum</th><th>Sentiment</th></tr>";
+    let rows = "<tr><th>Symbol</th><th>Score</th><th>Signal</th><th>Twitter</th><th>News</th><th>5D Return</th></tr>";
 
-    d.top_picks.forEach(s=>{
+    d.results.forEach(s=>{
         rows += `<tr>
             <td>${s.symbol}</td>
             <td>${s.score}</td>
-            <td class="${s.signal.toLowerCase()}">${s.signal}</td>
-            <td>${s.price}</td>
-            <td>${s.momentum}</td>
-            <td>${s.sentiment}</td>
+            <td>${s.signal}</td>
+            <td>${s.features.twitter}</td>
+            <td>${s.features.news}</td>
+            <td>${s.features.returns_5d}</td>
         </tr>`;
     });
 
