@@ -1,6 +1,6 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
-import threading, time, random, asyncio
+import threading, time, asyncio
 
 from engine import *
 from stream_market import market
@@ -43,15 +43,18 @@ clients = []
 last_heartbeat = {"t": time.time()}
 
 # =========================
-# 📊 DAY TRADING CONTROLS (NEW)
+# DAY TRADING ENGINE
 # =========================
+trade_counter = 0
+TRADE_TARGET = 30
+
 daily_stats = {
     "trades": 0,
     "start_equity": 5000,
     "profit": 0
 }
 
-MAX_TRADES = 10
+MAX_TRADES = 40
 DAILY_TARGET = 100
 DAILY_STOP = -50
 
@@ -96,10 +99,10 @@ def detect_chop(mkt):
 
 
 # =========================
-# TRADING LOOP (DAY TRADER ENGINE)
+# TRADING LOOP (FIXED + DAY TRADER MODE)
 # =========================
 def trading_loop():
-    global agents, latest_state, cycle
+    global agents, latest_state, cycle, trade_counter
 
     analytics = Analytics()
 
@@ -118,18 +121,14 @@ def trading_loop():
             trades = []
             chop = detect_chop(mkt)
 
-            # =========================
-            # DAILY RESET (SIMULATED DAY)
-            # =========================
+            # reset daily session
             if cycle % 200 == 0:
                 daily_stats["trades"] = 0
                 daily_stats["start_equity"] = portfolio.equity
+                trade_counter = 0
 
             daily_stats["profit"] = portfolio.equity - daily_stats["start_equity"]
 
-            # =========================
-            # STOCK LOOP
-            # =========================
             for symbol, data in mkt.items():
 
                 votes, weights = [], []
@@ -152,17 +151,15 @@ def trading_loop():
                         symbol, action, conf, data, portfolio, chop
                     )
 
-                if chop:
-                    allowed = False
-
-                # =========================
-                # 🛑 DAY TRADING LIMITS (NEW)
-                # =========================
+                # DAY TRADING LIMITS
                 if (
                     daily_stats["trades"] >= MAX_TRADES or
                     daily_stats["profit"] >= DAILY_TARGET or
                     daily_stats["profit"] <= DAILY_STOP
                 ):
+                    allowed = False
+
+                if chop:
                     allowed = False
 
                 price = data["price"]
@@ -172,10 +169,12 @@ def trading_loop():
                     if action == "BUY":
                         portfolio.buy(symbol, price, conf)
                         daily_stats["trades"] += 1
+                        trade_counter += 1
 
                     elif action == "SELL":
                         portfolio.sell(symbol, price)
                         daily_stats["trades"] += 1
+                        trade_counter += 1
 
                     pnl = conf
 
@@ -195,7 +194,7 @@ def trading_loop():
 
             cycle += 1
 
-            agents = [(name, evolver.mutate(agent)) for name, agent in agents]
+            agents = [(n, evolver.mutate(a)) for n, a in agents]
 
             latest_state = {
                 "equity": round(portfolio.equity, 2),
@@ -205,13 +204,9 @@ def trading_loop():
                 "chop_zone": chop,
                 "heartbeat": last_heartbeat["t"],
                 "trades": trades[-20:],
-
-                # =========================
-                # LIVE DAY TRADING STATS
-                # =========================
                 "daily_trades": daily_stats["trades"],
                 "daily_profit": round(daily_stats["profit"], 2),
-                "daily_target": DAILY_TARGET
+                "trade_counter": trade_counter
             }
 
             time.sleep(1.2)
@@ -222,14 +217,14 @@ def trading_loop():
 
 
 # =========================
-# START THREADS
+# START SYSTEM THREADS
 # =========================
 threading.Thread(target=trading_loop, daemon=True).start()
 threading.Thread(target=watchdog, daemon=True).start()
 
 
 # =========================
-# ROUTES
+# ROUTES (FIXED CLEAN)
 # =========================
 @app.get("/state")
 def state():
@@ -238,57 +233,4 @@ def state():
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return """
-    <html>
-    <head>
-        <title>AI Day Trading Terminal</title>
-        <style>
-            body { background:#0b0f14; color:white; font-family:monospace; }
-            .box { background:#111827; margin:10px; padding:10px; border-radius:8px; }
-        </style>
-    </head>
-
-    <body>
-        <h2>LIVE DAY TRADING AI</h2>
-
-        <div class="box">
-            <h3>Equity: <span id="eq">...</span></h3>
-            <h3>Cash: <span id="cash">...</span></h3>
-            <h3>Daily Profit: <span id="profit">...</span></h3>
-            <h3>Trades Today: <span id="trades">...</span></h3>
-        </div>
-
-        <div class="box">
-            <h3>Agents</h3>
-            <pre id="agents"></pre>
-        </div>
-
-        <div class="box">
-            <h3>Live Trades</h3>
-            <pre id="log"></pre>
-        </div>
-
-        <script>
-            async function load(){
-                const r = await fetch("/state");
-                const d = await r.json();
-
-                document.getElementById("eq").innerText = d.equity;
-                document.getElementById("cash").innerText = d.cash;
-
-                document.getElementById("profit").innerText = d.daily_profit;
-                document.getElementById("trades").innerText = d.daily_trades;
-
-                document.getElementById("agents").innerText =
-                    JSON.stringify(d.agent_scores, null, 2);
-
-                document.getElementById("log").innerText =
-                    JSON.stringify(d.trades || [], null, 2);
-            }
-
-            setInterval(load, 1000);
-            load();
-        </script>
-    </body>
-    </html>
-    """
+    return open("frontend.html").read()

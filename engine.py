@@ -1,6 +1,67 @@
 from collections import defaultdict, deque
 import math
 import random
+import time
+
+class DayTradingEngine:
+    def __init__(self):
+        self.trade_log = []
+        self.agent_stats = defaultdict(lambda: {
+            "wins": 0,
+            "losses": 0,
+            "pnl": 0.0
+        })
+        self.daily_pnl = 0.0
+        self.max_daily_loss = -200  # safety lock
+        self.max_daily_profit = 300
+
+    # -------------------------
+    # LOG TRADE
+    # -------------------------
+    def log_trade(self, agent, symbol, action, entry, exit_price):
+        pnl = (exit_price - entry) if action == "BUY" else (entry - exit_price)
+
+        self.trade_log.append({
+            "agent": agent,
+            "symbol": symbol,
+            "pnl": pnl,
+            "time": time.time()
+        })
+
+        self.daily_pnl += pnl
+
+        stats = self.agent_stats[agent]
+        stats["pnl"] += pnl
+
+        if pnl > 0:
+            stats["wins"] += 1
+        else:
+            stats["losses"] += 1
+
+    # -------------------------
+    # WIN RATE
+    # -------------------------
+    def win_rate(self, agent):
+        s = self.agent_stats[agent]
+        total = s["wins"] + s["losses"]
+        if total == 0:
+            return 0.5
+        return s["wins"] / total
+
+    # -------------------------
+    # RISK LOCK
+    # -------------------------
+    def allow_trading(self):
+        if self.daily_pnl < self.max_daily_loss:
+            return False
+        return True
+
+    # -------------------------
+    # RESET DAY (FOR OVERNIGHT FLAT)
+    # -------------------------
+    def reset_day(self):
+        self.trade_log.clear()
+        self.daily_pnl = 0.0
 
 # =========================
 # 💰 PORTFOLIO
